@@ -57,7 +57,7 @@ cd <where_ever_you_want>
 git clone https://github.com/FlyingDomotic/chickenDoor.git chickenDoor
 ```
 2. Make ESP connections (have a look at chickenDoor shema.jpg):
-	- Motor's relays connected to D5 (open) and D6 (close). On contact side, connect positive motor's wire to D5 relay central position, negative motor's wire on D6 relay central position. Connect both relays to power ground on normally closed contact and INA219 V- on normally open.
+	- Motor's relays connected to D5 (open) and D6 (close). On contact side, connect positive motor's wire (the one which opens door when connected to positive lead) to D5 relay central position, negative motor's wire (the one which opens door when cpnnected to ground) on D6 relay central position. Connect both relays to power ground on normally closed contact and INA219 V- on normally open.
 	- INA219 should be connected to D1 (SCL) and D2 (SDA). In addition, power ground should be connected on GND and power positive voltage to V+. Connect VCC to +3.3V.
 	- Optional LDR connected between A0 and +3.3V and a 100K pull-up resistor between A0 and ground (leave it unconnected if not used)
 	- Optional IR detector to D7 (leave not connected if not used).
@@ -75,7 +75,7 @@ cd <là_où_vous_voulez_l'installer>
 git clone https://github.com/FlyingDomotic/chickenDoor.git chickenDoor
 ```
 2. Connecter l'ESP (jetez un oeil sur le fichier chickenDoor schema.jpg) :
-	- Les relais du moteur sont connectés sur D5 (ouverture) et D6 (fermeture). Du coté contacts, le fil positif du moteur doit être connecté sur la position centrale du relai D5, le fil négatif du moteur sur le point central du relai D6. Connecter le contact  normalement fermé de chaque relai à la masse, et le normalement ouvert à la borne V6 de l'INA219.
+	- Les relais du moteur sont connectés sur D5 (ouverture) et D6 (fermeture). Du coté contacts, le fil positif du moteur (celui qui ouvre la porte lorsqu'il est connecté au positif de l'alimentation) doit être connecté sur la position centrale du relai D5, le fil négatif du moteur (celui qui ouvre la porte lorsque connecté au négatif de l'alimentation) sur le point central du relai D6. Connecter le contact  normalement fermé de chaque relai à la masse, et le normalement ouvert à la borne V6 de l'INA219.
 	- L'INA219 doit être connecté à D1 (SCL) et D2 (SDA). De plus, la masse de l'alimentation doit être connectée à GND, et le pole positif de l'alimentation du moteur sur V+. Connecter VCC au +3.3V.
 	- la LDR (optionnelle) doit être connectée entre A0 et le +3.3V et une résistance de tirage de 100 K entre A0 et la masse (laisser non connecté si la LDR n'est pas utilisé).
 	- Le détecteur IR (optionnel) doit être connecté sur D7 (à laisser non connecté sui pas utilisé).
