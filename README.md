@@ -2,7 +2,7 @@
 
 [English version and French version in the same document]
 
-Open and close a chicken coop door depending on sun phases and/or external luminosity (with optional network connection)
+Open and close a chicken coop door depending on sun phases and/or external illumination (with optional network connection)
 
 [ Versions françaises et anglaises dans le même document]
 
@@ -10,11 +10,11 @@ Ouvre et ferme la porte d'un poulailler en fonction des phases du soleil et/ou d
 
 ## What's for?/A quoi ça sert ?
 
-For those having a chicken coop, opening and closing door every morning/evening is not so fun. You can (as I did) buy a system with a small LDR (Light Dependant Resistance) to open/close door depending on luminosity. however, as this is an external system, rain and condensation will oxide contacts over time, in particular those soldering LDR with connecting rods. When it happen, light is not properly detected, and door not operated anymore.
+For those having a chicken coop, opening and closing door every morning/evening is not so fun. You can (as I did) buy a system with a small LDR (Light Dependant Resistance) to open/close door depending on illumination. however, as this is an external system, rain and condensation will oxide contacts over time, in particular those soldering LDR with connecting rods. When it happen, light is not properly detected, and door not operated anymore.
 
 In addition, this system (at least mine), is not connected, so automation don't know what's door status.
 
-That's why I decided to implement a small module, giving flexibility in door opening/closing. To make it short, you can open/close door by either luminosity, sun phases (sunrise/sunset +/- offset) and/or external commands. In addition, an IR detector placed perpendicularly of door can detect an entering/exiting chicken, and avoid crushing it, while a current detector can detect a blocked door, either by a chicken or a external object through door path. End of course can be detected by a current drop (when contacts are curring power when reaching target) or increase (when motor is blocked at course end). Lastly, we can also detect too long opening/closing phases.
+That's why I decided to implement a small module, giving flexibility in door opening/closing. To make it short, you can open/close door by either illumination, sun phases (sunrise/sunset +/- offset) and/or external commands. In addition, an IR detector placed perpendicularly of door can detect an entering/exiting chicken, and avoid crushing it, while a current detector can detect a blocked door, either by a chicken or a external object through door path. End of course can be detected by a current drop (when contacts are curring power when reaching target) or increase (when motor is blocked at course end). Lastly, we can also detect too long opening/closing phases.
 
 Last but not least, you can have a feedback about door status, alarm status and even opening percentage and  power/battery voltage.
 
@@ -30,13 +30,13 @@ De plus, on a un retour d'état de la porte, des alarmes et même du pourcentage
 
 ## Hardware/Matériel
 
-Module is build around an ESP8266, associated to a pair of relay (to power motor) and an INA219 current detector. Optionally, you can add a LDR (to detect luminosity) and an IR detector like E3F-DSP30D1 (to detect a chicken crossing door).
+Module is build around an ESP8266, associated to a pair of relay (to power motor) and an INA219 current detector. Optionally, you can add a LDR (to detect illumination) and an IR detector like E3F-DSP30D1 (to detect a chicken crossing door).
 
 Le module est construit autour d'un ESP8266, d'une paire de relais (pour alimenter le moteur) et d'un détecteur de courant de type INA219. On peut optionnellement ajouter une LDR (pour détecter la luminosité) et un détecteur infra-rouge genre E3F-DSP30D1(pour détecter une poule entrante/sortante.
 
 ## Network/Réseau
 
-Module can work autonomously, without network (in this case, only luminosity can be used, sun related time and external commands are not available). But you can use ESP8266 WiFi chip, to connect it to you network, and being able to manage/monitor it.
+Module can work autonomously, without network (in this case, only illumination can be used, sun related time and external commands are not available). But you can use ESP8266 WiFi chip, to connect it to you network, and being able to manage/monitor it.
 
 Le module peut fonctionner de façon autonome, sans réseau (dans ce cas, seul la luminosité peut être utilisée, les horaires liées au soleil et les connexions externes ne sont pas disponibles). Mais vous pouvez avantageusement utiliser la connexion Wifi de l'ESP8266 pour le connecter à votre réseau, et être capable de le commander/monitorer.
 
@@ -125,9 +125,9 @@ Note: in manual mode, only commands will allow to change door position. In autom
 		+ "sunState" = sun state/état du soleil (0=Unknown/Inconnu, 1=Before open/Avant ouverture, 2=Between open and close/Entre ouverture et fermeture, 3=After close/Après fermeture).
 		+ "sunStateText" = sun state in text format/Soleil en format texte.
 		+ "manualMode" = manual mode active/Mode manuel actif.
-		+ "luminosity" = current luminosity (0-1204)/Luminosité actuelle.
+		+ "illumination" = current illumination (0-1204)/Luminosité actuelle.
 		+ "motorVoltage" = motor voltage/Tension du moteur.
-		+ "motorIntensity" = motor intensity/Intensité du moteur.
+		+ "motorIntensity" = motor intensity/Intensité du moteur (mA)
 		+ "motorDuration" = seconds since motor started/Nombre de secondes depuis le démarrage du moteur.
 		+ "lastStatusSent" = seconds since last status sent/Nombre de secondes depuis l'envoi du dernier état.
 		+ "chickenDetected" = chicken detected in front of door?/poule détectée devant la porte?
@@ -138,6 +138,7 @@ Note: in manual mode, only commands will allow to change door position. In autom
 		+ "sunClose" = sun door close time/Heure solaire de fermeture de la porte
 	- mqttSignalTopic: MQTT signal topic, where information and error messages are sent to (in plain text format)/sujet MQTT où les messages d'information ou d'erreur sont envoyées (en format texte).
 	- mqttSettingsTopic: MQTT settings topic, where settings are read (and sent on request). Data is in JSON format. Fields are the same as those in chickenDoorParameters.h, settings part/sujet MQTT où les paramètres sont lus (et écrits sur demande). Les données sont au format JSON. Les champs sont identiques à ceux données dans le fichier chickenDoorParameters.h, partie paramètres.
+	- MqttLastWillTopic: MQTT Last Will Topic, where MQTT status is written (contains "up" when module is connected to MQTT, "down" else)/ Sujet MQTT où le statut MQTT est écrit (contient "up" quand le module est connecté à MQTT, "down" sinon).
 
 
 ## Backups/Sauvegardes
