@@ -1,3 +1,5 @@
+#define CHICKEN_DOOR_VERSION "24.5.5-8"   // Version of this code
+
 #include <ESP8266WiFi.h>			      // Wifi (embeded)
 #include <Arduino.h>                // Arduino (embeded)
 #include <Wire.h>                   // I2C (embeded)
@@ -9,6 +11,9 @@
 #include <chickenDoorParameters.h>  // Constants for this program
 
 //    ### Variables ###
+
+#define XQUOTE(x) #x
+#define QUOTE(x) XQUOTE(x)
 
 //  *** Wifi stuff ***
 WiFiEventHandler onStationModeConnectedHandler; // Event handler called when WiFi is connected
@@ -132,7 +137,7 @@ static void signal(const char* _format, ...) {
   if (mqttServer[0]) {                                  // MQTT server defined?
     uint16_t result = mqttClient.publish(mqttSignalTopic, 0, true, msg);  // ... publish message to signal topic
     #ifdef SERIAL_PORT
-      SERIAL_PORT.printf(PSTR("Publish to %s returned %d\n"), mqttSignalTopic, result);
+      SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), msg, mqttSignalTopic, result);
     #endif
   }
 }
@@ -147,6 +152,9 @@ void wiFiSetup() {
   signal(PSTR("Connecting to WiFi..."));
 	WiFi.hostname(nodeName);									                                      // Defines this module name
   WiFi.mode(WIFI_STA);                                                            // We want station mode (connect to an existing SSID)
+  #ifdef SERIAL_PORT
+    SERIAL_PORT.printf(PSTR("SSID: %s, key: %s\n"), wifiSSID, wifiKey);
+  #endif
   WiFi.begin(wifiSSID, wifiKey);                                                  // SSID to connect to
 }
 
@@ -205,8 +213,11 @@ static void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProp
 //Executed when MQTT is connected
 static void onMqttConnect(bool sessionPresent) {
   signal(PSTR("MQTT connected"));
-  mqttClient.publish(mqttLastWillTopic, 0, true,  // Last will topic
-    "{\"state\":\"up\"}");
+  uint16_t result = mqttClient.publish(mqttLastWillTopic, 0, true,  // Last will topic
+    "{\"state\":\"up\",\"id\":\"" QUOTE(PROG_NAME) "\",\"version\":\"" CHICKEN_DOOR_VERSION "\"}");
+  #ifdef SERIAL_PORT
+    SERIAL_PORT.printf(PSTR("Publish to %s returned %d\n"), mqttLastWillTopic, result);
+  #endif
   mqttClient.subscribe(mqttCommandTopic, 0);  // Subscribe to command topic
   mqttClient.subscribe(mqttStatusTopic, 0);   // Subscribe to status topic
   mqttClient.subscribe(mqttSettingsTopic, 0); // Subscribe to settings topic
@@ -266,7 +277,7 @@ void ntpLoop() {
       }
       sunStates newState = beforeOpen;  // By default, before sun rise
       if (nowTime >= sunOpen) {                                               // Are we at or over sun rise ?
-        if (nowTime < sunOpen) {                                               // Are we before sun set
+        if (nowTime < sunClose) {                                             // Are we before sun set
           newState = betwenOpenAndClose;
         } else {
           newState = afterClose;
@@ -358,7 +369,15 @@ static void stopDoor(alarmStates _stopReason) {
 // Door management loop
 void doorLoop() {
   // Is a chicken standing through door?
+  bool previousChickenDetected = chickenDetected;
   chickenDetected = (digitalRead(chickenDetectionPin) == CHICKEN_DETECTED);
+  if (previousChickenDetected != chickenDetected) {
+    if (chickenDetected) {
+      signal("Chicken detected!");
+    } else {
+      signal("Chicken gone");
+    }
+  }
   readCurrent();                                    // Read motor current and voltage
 
   // Are we closing?
@@ -378,7 +397,8 @@ void doorLoop() {
       // Do we started more than 1,5 times close duration?
       if ((millis() - motorStartTime) > (closeDuration + (closeDuration / 2))) {
         stopDoor(alarmClosingTooLong);              // Stop door with reason
-      } else if (                                   // Check motor current giving endOfCourse current
+      } else if ((millis() - motorStartTime) > 500) { // Check motor's intensity only 500 ms after start, masking start overcurrent
+        if (                                          // Check motor current giving endOfCourse current
                   (endOfCourseCurrent < 0 && motorIntensity < -endOfCourseCurrent) ||
                   (endOfCourseCurrent >= 0 && motorIntensity >= endOfCourseCurrent)
                 ) {
@@ -402,6 +422,7 @@ void doorLoop() {
         }
       }
     }
+  }
   }
   // Are we opening?
   if (doorState == doorOpening) {
@@ -529,7 +550,7 @@ static void sendSettings() {
   serializeJsonPretty(settings, buffer, sizeof(buffer));  // Convert document to string
   uint16_t result = mqttClient.publish(mqttSettingsTopic, 0, true, buffer); // Sends to settings topics
   #ifdef SERIAL_PORT
-    SERIAL_PORT.printf(PSTR("Publish to %s returned %d\n"), mqttSettingsTopic, result);
+    SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttSettingsTopic, result);
   #endif
 }
 
@@ -604,7 +625,7 @@ static void sendStatus() {                              // Exit if no MQTT serve
   serializeJsonPretty(status, buffer, sizeof(buffer));  // Load buffer with JSON data
   uint16_t result = mqttClient.publish(mqttStatusTopic, 0, true, buffer); // Send to status topic
   #ifdef SERIAL_PORT
-    SERIAL_PORT.printf(PSTR("Publish to %s returned %d\n"), mqttStatusTopic, result);
+    SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttStatusTopic, result);
   #endif
   statusSentTime = millis();                            // Save last time we sent an update (used in doorLoop)
 }
@@ -635,7 +656,7 @@ static void commandReceived(char* msg) {
       snprintf_P(buffer, sizeof(buffer), PSTR("%s unknown"), msg);
       uint16_t result = mqttClient.publish(mqttCommandTopic, 0, true, buffer);
       #ifdef SERIAL_PORT
-        SERIAL_PORT.printf(PSTR("Publish to %s returned %d\n"), mqttCommandTopic, result);
+        SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttCommandTopic, result);
       #endif
       signal(PSTR("Can't understand >%s< command!"), msg);
     }
@@ -646,7 +667,7 @@ static void commandReceived(char* msg) {
   sniprintf(buffer, sizeof(buffer), "%s done", msg);
   uint16_t result = mqttClient.publish(mqttCommandTopic, 0, true, buffer);
   #ifdef SERIAL_PORT
-    SERIAL_PORT.printf(PSTR("Publish to %s returned %d\n"), mqttCommandTopic, result);
+    SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttCommandTopic, result);
   #endif
 }
 
@@ -654,8 +675,9 @@ static void commandReceived(char* msg) {
 void setup(){
   #ifdef SERIAL_PORT          // If SERIAL_PORT defined
     SERIAL_PORT.begin(74880); // Init Serial to right speed
+    SERIAL_PORT.println("");
   #endif
-  signal(PSTR("Starting..."));
+  signal(PSTR(QUOTE(PROG_NAME) " V" CHICKEN_DOOR_VERSION " starting..."));
   mqttSetup();                // MQTT setup
   wiFiSetup();                // WiFi setup
   ntpSetup();                 // NTP setup

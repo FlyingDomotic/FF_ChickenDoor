@@ -12,6 +12,10 @@ uint8_t chickenDetectionPin = D7;                   // Pin where chicken detecto
                                                     // Pinoche où le détecteur de poule est connecté
 uint8_t ldrPin = A0;                                // Pin where LDR is connected to
                                                     // Pinoche où le la LDR est connectée
+#define RELAY_ON LOW                                // Level to apply to make close a relay (LOW or HIGH)
+                                                    // Etat a appliquer pour coller un relai (LOW ou HIGH)
+#define CHICKEN_DETECTED LOW                        // Level when a chicken is detected
+                                                    // Niveau lorsqu'une poule est détectée
 
 //  *** Wifi stuff ***
 //  *** Connection WiFi ***
@@ -40,6 +44,8 @@ char mqttSignalTopic[] = "chickenDoor/signal";      // MQTT signal topic, where 
                                                     // Sujet MQTT où les messages d'information ou d'erreur sont envoyées
 char mqttSettingsTopic[] = "chickenDoor/settings";  // MQTT settings topic, where settings are read (and sent on request)
                                                     // Sujet MQTT où les paramètres sont lus (et écrits sur demande)
+char mqttLastWillTopic[] = "chickenDoor/LWT";       // MQTT Last Will Topic, where MQTT status is written
+                                                    // Sujet MQTT où le statut MQTT est écrit
 
 //  *** Time zone ***
 //  *** Fuseau horaire ***
@@ -67,9 +73,9 @@ float zenith = JC_Sunrise::civilZenith;             // Type of zenith. Can be:
 
 //  *** Settings (can be changed through mqttSettingsTopic) ***
 //  *** Paramètres (peuvent être changés au travers du sujet MqttSettingsTopic) ***
-uint16_t openLuminosity = 1023;                     // Luminosity required to open door (0-1023)
+uint16_t openIllumination = 1023;                   // Illumination required to open door (0-1023). Set it to zero to disable Illumination globally.
                                                     // Luminosité de l'ouverture de porte (0-1023)
-uint16_t closeLuminosity = 0;                       // Luminosity required to close door (0-1023)
+uint16_t closeIllumination = 0;                     // Illumination required to close door (0-1023)
                                                     // Luminosité de la fermeture de porte (0-1023)
 uint16_t openDuration = 32000;                      // Normal duration of door opening (in ms)
                                                     // Durée normale de l'ouverture de porte (en ms)
