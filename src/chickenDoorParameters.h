@@ -4,19 +4,24 @@
 //  *** Options ***
 #define SERIAL_PORT Serial                          // Indicates which serial to use (don't define if no serial output needed)
                                                     // Indique le port série à utiliser (ne pas définir si on ne veut pas de sortie série)
-uint8_t openPin = D5;                               // Pin where open relay is connected to
+int8_t openPin = D5;                                // Pin where open relay is connected to
                                                     // Pinoche où le relai ouverture est connecté
-uint8_t closePin = D6;                              // Pin where close relay is connected to
+int8_t closePin = D6;                               // Pin where close relay is connected to
                                                     // Pinoche où le relai fermeture est connecté
-uint8_t chickenDetectionPin = D7;                   // Pin where chicken detector is connected to
+int8_t chickenDetectionPin = D7;                    // Pin where chicken detector is connected to
                                                     // Pinoche où le détecteur de poule est connecté
-uint8_t ldrPin = A0;                                // Pin where LDR is connected to
+int8_t buttonPin = D3;                              // Pin where manual command button is connected to
+                                                    // Pinoche où le bouton de commande manuelle est connecté
+int8_t ldrPin = A0;                                 // Pin where LDR is connected to
                                                     // Pinoche où le la LDR est connectée
 #define RELAY_ON LOW                                // Level to apply to make close a relay (LOW or HIGH)
                                                     // Etat a appliquer pour coller un relai (LOW ou HIGH)
 #define CHICKEN_DETECTED LOW                        // Level when a chicken is detected
                                                     // Niveau lorsqu'une poule est détectée
-
+#define BUTTON_PUSHED_LEVEL LOW                     // Level when button is pushed
+                                                    // Niveau lorsque le bouton est poussé
+#define MAXIMUM_SIGNAL_INTERVAL 600000              // Maximum interval between 2 status messages (in ms)
+                                                    // Delai maximum entre 2 messages de statut (en ms)
 //  *** Wifi stuff ***
 //  *** Connection WiFi ***
 char wifiSSID[] = "MySSID";                         // SSID to connected to
@@ -25,6 +30,8 @@ char wifiKey[] = "MyPassword";                      // SSID password
                                                     // Mot de passe associé au SSID
 char nodeName[] = "chickenDoor";                    // ESP node name
                                                     // Nom du module ESP
+#define OTA_SUPPORT                                 // We require OTA support (comment if not needed)
+                                                    // On souhaite une mise à jour par WiFi (commenter si pas utilisé)
 
 //  *** MQTT client ***
 //  *** Client MQTT ***
