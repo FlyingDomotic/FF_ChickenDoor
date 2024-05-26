@@ -105,26 +105,29 @@ You may send the following commands through MQTT command topic. Response will be
 
 Vous pouvez envoyer les commandes suivantes au sujet MQTT commande. La réponse sera faite dans le même sujet, en ajoutant "done" ou "unkown" à la commande envoyée. De plus, en fonction de la commande, vous pouvez également recevoir des données dans les sujets d'information, d'état ou de paramétrage.
 
-	- "close": close the door and activate manual mode/ferme la porte et passe en mode manuel.
-	- "open": open the door and activate manual mode/ouvre la porte et passe en mode manuel.
+	- "manualclose": close the door and activate manual mode/ferme la porte et passe en mode manuel.
+	- "close": close the door and activate forced mode/ferme la porte et passe en mode forcé.
+	- "manualopen": open the door and activate manual mode/ouvre la porte et passe en mode manuel.
+	- "open": open the door and activate forced mode/ouvre la porte et passe en mode forcé.
 	- "stop": stops door at current position and activate manual mode/arrête la porte dans la position courante et passe en mode manuel.
 	- "auto": activate automatic mode/active le mode automatique.
 	- "status": send back current status in MQTT status topic./envoie l'état actuel dans le sujet MQTT status.
 	- "settings": send back current settings in MQTT settings topic./envoie les paramètres courants  dans le sujet MQTT paramètres.
 
-Note: in manual mode, only commands will allow to change door position. In automatic mode, light and/or sun position will move door./En mode manuel, seules les commandes reçues vont changer la position de la porte. En mode automatique, la luminosité et/ou la position du soleil vont déplacer la porte.
+Note: in manual mode, only commands will allow to change door position. In automatic mode, light and/or sun position will move door. Forced mode will be cleared when light/sun will be in phase with current position./En mode manuel, seules les commandes reçues vont changer la position de la porte. En mode automatique, la luminosité et/ou la position du soleil vont déplacer la porte. Le mode forcé sera désactivé lorsque la luminosité et/ou la position du soleil seront en phase avec l'état de la porte.
 
 ## Topic contents/Contenu des sujets
 
 	- mqttCommandTopic: MQTT command topic, where commands are received. Write here commands to send to module. It'll write back original command followed by "done" or "unknown"/Sujet MQTT où les commandes sont reçues. Écrivez ici les commandes à envoyer au module. Il va écrire en retour la commande originale suivie de "done" (fait) ou "unknown" (inconnu).
 	- mqttStatusTopic: MQTT status topic, where status is sent to (and read at startup). Data is in JSON format with following fields/sujet MQTT où les états sont envoyés (et lus au lancement). Les données sont au format JSON, avec les champs suivants :
-		+ "doorState" = door state/état de la porte (0=Unknown/Inconnu, 1=Closed/Fermé, 2=Opening/En cours d'ouverture, 3=Opened/Ouverte, 4=Closing/En cours de fermture, 5=Stopped/Arrêtée)
+		+ "doorState" = door state/état de la porte (0=Unknown/Inconnu, 1=Closed/Fermé, 2=Opening/En cours d'ouverture, 3=Opened/Ouverte, 4=Closing/En cours de fermeture, 5=Stopped/Arrêtée)
 		+ "doorStateText" = door state in text format/État de la porte en format texte.
 		+ "alarmState" = alarm state/état de l'alarme(0=None/Pas d'alarme, 1=Chicken detected/Poule détectée, 2=Door blocked opening/Porte bloquée pendant l'ouverture, 3=Door blocked closing/Porte bloquée pendant la fermeture, 4=Opening too long/Ouverture trop longue, 5=Closing too long/Fermeture trop longue, 6=Stopped by user/Stoppé par l'utilisateur).
 		+ "alarmStateText" = alarm state in text format/Alarme en format texte.
 		+ "sunState" = sun state/état du soleil (0=Unknown/Inconnu, 1=Before open/Avant ouverture, 2=Between open and close/Entre ouverture et fermeture, 3=After close/Après fermeture).
 		+ "sunStateText" = sun state in text format/Soleil en format texte.
 		+ "manualMode" = manual mode active/Mode manuel actif.
+		+ "forcedMode" = forced mode active/Mode forcé actif.
 		+ "illumination" = current illumination (0-1204)/Luminosité actuelle.
 		+ "motorVoltage" = motor voltage/Tension du moteur.
 		+ "motorIntensity" = motor intensity/Intensité du moteur (mA)

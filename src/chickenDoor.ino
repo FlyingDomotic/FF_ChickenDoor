@@ -1,4 +1,4 @@
-#define CHICKEN_DOOR_VERSION "24.5.11-2"  // Version of this code
+#define CHICKEN_DOOR_VERSION "24.5.26-1"  // Version of this code
 
 #include <ESP8266WiFi.h>			      // Wifi (embeded)
 #include <Arduino.h>                // Arduino (embeded)
@@ -100,6 +100,7 @@ sunStates sunState = sunUnknown;    // Sun current state
 doorStates doorState = doorUnknown; // Door current state
 alarmStates alarmState = alarmNone; // Alarm current state
 bool manualMode = false;            // Are we in manual moden, only accepting external commands?
+bool forcedMode = false;            // Are we in forced mode, until sun is aligned with command?
 bool chickenDetected = false;       // Do we currently detect chicken (close to) door?
 bool doorUncertainPosition = true;  // Is door position uncertain? (reset after a full open or close)
 float motorVoltage = 0;             // Last mesured motor voltage
@@ -319,6 +320,8 @@ void ntpLoop() {
           }
           if (doorState != doorClosed && !manualMode) {                       // If door not closed and not in manual mode
             closeDoor();
+          } else if (doorState == doorClosed && forcedMode) {                 // If door already closed and in forced mode
+            forcedMode = false;
           }
           break;
         case betwenOpenAndClose: 
@@ -327,6 +330,8 @@ void ntpLoop() {
           }
           if (doorState != doorOpened  && !manualMode) {                      // If door not opened  and not in manual mode
             openDoor();
+          } else if (doorState == doorOpened && forcedMode) {                 // If door already opened and in forced mode
+            forcedMode = false;
           }
           break;
         case afterClose: 
@@ -335,6 +340,8 @@ void ntpLoop() {
           }
           if (doorState != doorClosed && !manualMode) {                       // If door not closed and not in manual mode
             closeDoor();
+          } else if (doorState == doorClosed && forcedMode) {                 // If door already closed and in forced mode
+            forcedMode = false;
           }
           break;
         default: 
@@ -663,6 +670,7 @@ static void statusReceived(char* msg) {
     alarmState = status["alarmState"].as<alarmStates>();
     doorOpenPercentage = status["doorOpenPercentage"].as<float>();
     manualMode = status["manualMode"].as<bool>();
+    forcedMode = status["forcedMode"].as<bool>();
     doorUncertainPosition = (doorState == doorOpening || doorState == doorClosing || doorStartPercentage == doorUnknown);
     // Send status back (update of doorUncertainPosition)
     sendStatus();
@@ -697,11 +705,12 @@ static void sendStatus() {                              // Exit if no MQTT serve
   status["sunStateText"] = text;
   status["motorIntensity"] = motorIntensity;
   status["illumination"] = illumination;
-  status["motorIntensity"] = motorIntensity;
+  status["doorOpenPercentage"] = doorOpenPercentage;
   status["motorDuration"] = motorStartTime ? (millis()-motorStartTime)/1000 : 0;
   status["chickenDetected"] = chickenDetected ? true : false;
   status["doorUncertainPosition"] = doorUncertainPosition ? true : false;
   status["manualMode"] = manualMode ? true : false;
+  status["forcedMode"] = forcedMode ? true : false;
   snprintf_P(text, sizeof(text), PSTR("%.2f"), motorVoltage);
   status["motorVoltage"] = text;
   status["doorState"] = doorState;
@@ -735,18 +744,25 @@ static void sendStatus() {                              // Exit if no MQTT serve
 // Executed when a command topic has been received
 static void commandReceived(char* msg) {
   if (!strcmp(msg,"close")) {           // Is this a "close" command?
+    forcedMode = true;                      // We're in forced mode
+    closeDoor();                            // Close door
+  } else if (!strcmp(msg,"open")) {         // "Open" command?
+    forcedMode = true;                      // We're in forced mode
+    openDoor();                             // Open door
+  } else if (!strcmp(msg,"manualclose")) {  // Is this a "close" command?
     manualMode = true;                  // We're in manual mode
     closeDoor();                        // Close door
-   } else if (!strcmp(msg,"open")) {    // "Open" command?
-    manualMode = true;                  // Manual mode
+  } else if (!strcmp(msg,"manualopen")) {   // "Open" command?
+    manualMode = true;                      // We're in manual mode
     openDoor();                         // Open door
   } else if (!strcmp(msg,"stop")) {     // "stop" command?
-    manualMode = true;                  // Manual mode
+    manualMode = true;                      // We're in manual mode
     stopDoor(alarmStoppedbyUser);       // Stop door with right reason
   } else if (!strcmp(msg,"status")) {   // "status" command?
     sendStatus();                       // Send status
   } else if (!strcmp(msg,"auto")) {     // "auto" command?
     manualMode = false;                 // Clear manual mode
+    forcedMode = false;                     //   and forced mode
     sendStatus();                       // Update status
   } else if (!strcmp(msg,"settings")) { // "settings" command?
     sendSettings();                     // Send settings
