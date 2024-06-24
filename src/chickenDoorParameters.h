@@ -56,14 +56,10 @@ char mqttLastWillTopic[] = "chickenDoor/LWT";       // MQTT Last Will Topic, whe
 
 //  *** Time zone ***
 //  *** Fuseau horaire ***
-int8_t timeZone = 1;                                // (Signed) hour difference between GMT time and local time in winter (-12 to +14)
-                                                    // Nombre d'heures (signé) entre l'heure GMT et l'heure locale en hiver (-12 à + 14)
-int8_t timeMinutes = 0;                             // (Signed) additional minutes to add or substract (-59 to +59)
-                                                    // Nombre de minutes additionnelles (signé) à ajouter ou retirer (-59 à +59)
-uint8_t dstZone = 0;                                // DST zone (0=Europe, 1 = USA)
-                                                    // Type de changement horaire d'été (0=Europe, 1 = USA)
-bool dayLight = true;                               // Follow day light saving time? 
-                                                    // Heure d'hiver/d'été utilisée ?
+const char* ntpServer = "pool.ntp.org";             // NTP server to use
+                                                    // Serveur NTP à utiliser
+#define TIME_ZONE TZ_Europe_Paris                   // Time zone parameters
+                                                    // Fuseau horaire à utiliser
 
 //  *** Sun parameters ***
 //  *** Paramètres du soleil ***

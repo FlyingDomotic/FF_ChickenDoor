@@ -1,4 +1,4 @@
-#define CHICKEN_DOOR_VERSION "24.5.26-1"  // Version of this code
+#define CHICKEN_DOOR_VERSION "24.6.25-1"   // Version of this code
 
 #include <ESP8266WiFi.h>			      // Wifi (embeded)
 #include <Arduino.h>                // Arduino (embeded)
@@ -6,8 +6,10 @@
 #include <AsyncMqttClient.h>	      // Asynchronous MQTT client https://github.com/marvinroger/async-mqtt-client
 #include <ArduinoJson.h>			      // JSON documents https://github.com/bblanchon/ArduinoJson
 #include <Adafruit_INA219.h>        // INA219 current sensor https://github.com/adafruit/Adafruit_INA219
-#include <NtpClientLib.h>			      // NTP client https://github.com/gmag11/NtpClient
 #include <JC_sunrise.h>             // Sun rise/set computations https://github.com/JChristensen/JC_Sunrise
+#include <TZ.h>                           // Time zones
+#include <coredecls.h>                    // Declaration of settimeofday_cb()
+#include <time.h>                         // Time constants and structures
 #include <chickenDoorParameters.h>  // Constants for this program
 
 #ifdef OTA_SUPPORT                        // OTA (Over The Air) support required
@@ -29,10 +31,9 @@ IPAddress ipAddress;
 AsyncMqttClient mqttClient;                       // Asynchronous MQTT client
 bool mqttStatusReceived = false;                  // True if we received initial status at startup
 
-//  *** NTP & Sun set/rise***
+//  *** Sun set/rise***
 JC_Sunrise sunParams {latitude, longitude, zenith}; // Sun parameters (lat, lon, type of sunset/rise required)
 unsigned long lastNtpTest = 0;                      // Time of last NTP test
-int lastComputeDay = 0;                             // Day number of last computation (to reload sun set/rise when day changes or at startup)
 time_t nowTime = 0;                                 // Last current time (from NTP loop)
 time_t sunOpen  = 0;                                // Today's time to open door
 time_t sunClose = 0;                                // Today's time to close door
@@ -101,6 +102,7 @@ doorStates doorState = doorUnknown; // Door current state
 alarmStates alarmState = alarmNone; // Alarm current state
 bool manualMode = false;            // Are we in manual moden, only accepting external commands?
 bool forcedMode = false;            // Are we in forced mode, until sun is aligned with command?
+bool noSleepMode = false;           // No sleep mode enabled (to skip delay in maiin loop)
 bool chickenDetected = false;       // Do we currently detect chicken (close to) door?
 bool doorUncertainPosition = true;  // Is door position uncertain? (reset after a full open or close)
 float motorVoltage = 0;             // Last mesured motor voltage
@@ -170,12 +172,14 @@ void wiFiSetup() {
   onStationModeGotIPHandler = WiFi.onStationModeGotIP(&onWiFiGotIp);              // Declare got IP callback
 
   signal(PSTR("Connecting to WiFi..."));
+	WiFi.persistent(false);                                                         // Don't save WiFi (Flash wearing compliant)
 	WiFi.hostname(nodeName);									                                      // Defines this module name
   WiFi.mode(WIFI_STA);                                                            // We want station mode (connect to an existing SSID)
   #ifdef SERIAL_PORT
     SERIAL_PORT.printf(PSTR("SSID: %s, key: %s\n"), wifiSSID, wifiKey);
   #endif
   WiFi.begin(wifiSSID, wifiKey);                                                  // SSID to connect to
+  wifi_set_sleep_type(LIGHT_SLEEP_T);
   #ifdef OTA_SUPPORT
     ArduinoOTA.setHostname(nodeName);
     //ArduinoOTA.setPassword("myOtaPassword");                                    // Set OTA password and uncomment if needed
@@ -262,28 +266,23 @@ static void mqttConnect() {
 
 //  *** NTP & sun set/rise ***
 
-//  NTP setup
-void ntpSetup(){
-		NTP.begin("pool.ntp.org",timeZone, dayLight, timeMinutes);  // Start NTP
-    NTP.setDSTZone(dstZone);                                    // Set DST zone
+// Check is time is valid
+bool isTimeValid(time_t t) {
+    const time_t old_past = 1577836800;  // 2020-01-01T00:00:00Z
+    return t >= old_past;
 }
 
-// NTP loop
-void ntpLoop() {
-  if ((millis() - lastNtpTest) > 60000) {                                       // Check NTP every minute
-    mqttConnect();                                                              // Reconnect MQTT if needed
-    lastNtpTest = millis();                                                     // Save time of last test
-    time_t nowTime = now();                                                     // Get current time
-    if (NTP.SyncStatus()) {                                                     // If NTP is synchronized
-      if (day() != lastComputeDay) {                                            // Sun set/rise not computed for today
-        lastComputeDay = day();  // Extract day number
+// NTP set time callback - called each time NTP time is set (or adjusted every hour)
+void timeSetCallback(bool from_sntp) {
+  time_t nowTime = time(nullptr);                                         // Get current time
+  if (!isTimeValid(nowTime)) {
+    return;                                                               // Exit if time is not valid
+  }
         time_t sunSet = 0;                                                      // Today's sunset
         time_t sunRise = 0;                                                     // Today's sunrise
         uint16_t sunRiseInt = 0;                                                // Sun rise  in integer minutes (hours * 100) + minutes
         uint16_t sunSetInt = 0;                                                 // Sun set in integer minutes (hours * 100) + minutes
-        uint16_t timeZoneOffset = (timeZone * 60) + timeMinutes                 // Compute time zone offset to apply
-          + (NTP.isSummerTimePeriod(nowTime) ? 60 : 0);                         // Add one hour if summer time is active
-        sunParams.calculate(nowTime, timeZoneOffset, sunRise, sunSet);          // Calculate sun set and sun rise
+  sunParams.calculate(nowTime, 0, sunRise, sunSet);                       // Calculate sun set and sun rise
         struct tm * timeInfo;                                                   // Temporary time structure
         time_t clearTime = 0;                                                   // A null time
         timeInfo = gmtime(&clearTime);                                          // Clear timeInfo
@@ -304,7 +303,22 @@ void ntpLoop() {
         sunCloseInt = (timeInfo->tm_hour * 100) + timeInfo->tm_min;
         signal(PSTR("Now %d, SunRise %d, SunSet %d, open %d, close %d"), nowInt, sunRiseInt, sunSetInt, sunOpenInt, sunCloseInt);
         sendStatus();
-      }
+}
+
+//  NTP setup
+void ntpSetup(){
+  settimeofday_cb(timeSetCallback);
+  configTime(TZ_Europe_Paris, "pool.ntp.org");
+  yield();
+}
+
+// NTP loop
+void ntpLoop() {
+  if ((millis() - lastNtpTest) > 60000) {                                     // Check NTP every minute
+    mqttConnect();                                                            // Reconnect MQTT if needed
+    lastNtpTest = millis();                                                   // Save time of last test
+    time_t nowTime = time(nullptr);                                           // Get current time
+    if (isTimeValid(nowTime)) {                                               // Is time valid?
       sunStates newState = beforeOpen;  // By default, before sun rise
       if (nowTime >= sunOpen) {                                               // Are we at or over sun rise ?
         if (nowTime < sunClose) {                                             // Are we before sun set
@@ -376,6 +390,7 @@ void doorSetup(){
 // Close chicken door
 static void closeDoor() {
   signal(PSTR("Closing door"));
+  alarmState = alarmNone;                   // Clear alarm
   doorState = doorClosing;                  // Set door state
   doorStartPercentage = doorOpenPercentage; // Save start percentage
   motorStartTime = millis();                //  Save start time
@@ -388,6 +403,7 @@ static void closeDoor() {
 static void openDoor() {
   signal(PSTR("Opening door"));
   doorState = doorOpening;                  // Set door state
+  alarmState = alarmNone;                   // Clear alarm
   doorStartPercentage = doorOpenPercentage; // Save start percentage
   motorStartTime = millis();                // Save start time
   digitalWrite(closePin, RELAY_OFF);        // Deactivate close relay
@@ -430,8 +446,8 @@ void doorLoop() {
     // Is a chicken detected?
     if (chickenDetected) {                           // Yes
       signal(PSTR("Chicken detected while closing!"));
+      openDoor();                                     // Open door
       alarmState = alarmChickenDetected;            // Set alarm
-      openDoor();                                   // Open door
     } else {
       // Do we started 20% more than close duration?
       if ((millis() - motorStartTime) > (closeDuration * 1.2)) {
@@ -454,9 +470,9 @@ void doorLoop() {
         if (motorIntensity >= obstacleCurrent       // Motor currunt more than obstacle detected one
               && (doorOpenPercentage > 5              //  and (not close to fully closed
               || endOfCourseCurrent < 0)) {         //       or no end of course blocking current)
-            signal(PSTR("Door blocked, percentage %d, intensity %d!"), doorOpenPercentage, motorIntensity);
+            signal(PSTR("Door blocked, percentage %f, intensity %d!"), doorOpenPercentage, motorIntensity);
+            openDoor();                               // Open door
           alarmState = alarmDoorBlockedClosing;     // Set alarm
-          openDoor();                               // Open door
         }
       }
     }
@@ -628,7 +644,7 @@ static void settingsReceived(char* msg) {
 
   // Do we changed sun offset?
   if (sunOffsetMinutesBefore != sunOffsetMinutes) {
-    lastComputeDay = 0;                         // Force ntpLoop to recompute right values
+    timeSetCallback(false);                               // Call callback to recompute right values
   }
 }
 
@@ -671,6 +687,7 @@ static void statusReceived(char* msg) {
     doorOpenPercentage = status["doorOpenPercentage"].as<float>();
     manualMode = status["manualMode"].as<bool>();
     forcedMode = status["forcedMode"].as<bool>();
+    noSleepMode = status["noSleepMode"].as<bool>();
     doorUncertainPosition = (doorState == doorOpening || doorState == doorClosing || doorStartPercentage == doorUnknown);
     // Send status back (update of doorUncertainPosition)
     sendStatus();
@@ -711,6 +728,7 @@ static void sendStatus() {                              // Exit if no MQTT serve
   status["doorUncertainPosition"] = doorUncertainPosition ? true : false;
   status["manualMode"] = manualMode ? true : false;
   status["forcedMode"] = forcedMode ? true : false;
+  status["noSleepMode"] = noSleepMode ? true : false;
   snprintf_P(text, sizeof(text), PSTR("%.2f"), motorVoltage);
   status["motorVoltage"] = text;
   status["doorState"] = doorState;
@@ -758,11 +776,14 @@ static void commandReceived(char* msg) {
   } else if (!strcmp(msg,"stop")) {     // "stop" command?
     manualMode = true;                      // We're in manual mode
     stopDoor(alarmStoppedbyUser);       // Stop door with right reason
+  } else if (!strcmp(msg,"nosleep")) {      // "noSleep" command?
+    noSleepMode = true;                     // Send status
   } else if (!strcmp(msg,"status")) {   // "status" command?
     sendStatus();                       // Send status
   } else if (!strcmp(msg,"auto")) {     // "auto" command?
     manualMode = false;                 // Clear manual mode
     forcedMode = false;                     //   and forced mode
+    noSleepMode = false;                    //   and no sleep mode
     sendStatus();                       // Update status
   } else if (!strcmp(msg,"settings")) { // "settings" command?
     sendSettings();                     // Send settings
@@ -801,8 +822,8 @@ void setup(){
   #endif
   signal(PSTR(QUOTE(PROG_NAME) " V" CHICKEN_DOOR_VERSION " starting..."));
   mqttSetup();                // MQTT setup
-  wiFiSetup();                // WiFi setup
   ntpSetup();                 // NTP setup
+  wiFiSetup();                // WiFi setup
   illuminationSetup();        // Illumination setup
   doorSetup();                // Door setup
   buttonSetup();              // Button setup
@@ -818,4 +839,8 @@ void loop(){
   #ifdef OTA_SUPPORT
     ArduinoOTA.handle();
   #endif
+  // If not door in move and not button pushed, delay 5 seconds to reduce power consumption
+  if (doorState != doorClosing && doorState != doorOpening && !isButtonPushed && !noSleepMode) {
+    delay(5000);
+  }
 }
