@@ -1,20 +1,20 @@
-#define CHICKEN_DOOR_VERSION "24.6.25-1"   // Version of this code
+#define CHICKEN_DOOR_VERSION "24.6.30-2"  // Version of this code
 
-#include <ESP8266WiFi.h>			      // Wifi (embeded)
-#include <Arduino.h>                // Arduino (embeded)
-#include <Wire.h>                   // I2C (embeded)
-#include <AsyncMqttClient.h>	      // Asynchronous MQTT client https://github.com/marvinroger/async-mqtt-client
-#include <ArduinoJson.h>			      // JSON documents https://github.com/bblanchon/ArduinoJson
-#include <Adafruit_INA219.h>        // INA219 current sensor https://github.com/adafruit/Adafruit_INA219
-#include <JC_sunrise.h>             // Sun rise/set computations https://github.com/JChristensen/JC_Sunrise
+#include <ESP8266WiFi.h>                  // Wifi (embedded)
+#include <Arduino.h>                      // Arduino (embedded)
+#include <Wire.h>                         // I2C (embedded)
+#include <AsyncMqttClient.h>              // Asynchronous MQTT client https://github.com/marvinroger/async-mqtt-client
+#include <ArduinoJson.h>                  // JSON documents https://github.com/bblanchon/ArduinoJson
+#include <Adafruit_INA219.h>              // INA219 current sensor https://github.com/adafruit/Adafruit_INA219
+#include <JC_sunrise.h>                   // Sun rise/set computations https://github.com/JChristensen/JC_Sunrise
 #include <TZ.h>                           // Time zones
 #include <coredecls.h>                    // Declaration of settimeofday_cb()
 #include <time.h>                         // Time constants and structures
-#include <chickenDoorParameters.h>  // Constants for this program
+#include <chickenDoorParameters.h.ff>     // Constants for this program
 
 #ifdef OTA_SUPPORT                        // OTA (Over The Air) support required
-  #include <ESP8266mDNS.h>                // Dynamic DNS (embeded)
-  #include <ArduinoOTA.h>                 // Arduino OTA (embeded)
+  #include <ESP8266mDNS.h>                // Dynamic DNS (embedded)
+  #include <ArduinoOTA.h>                 // Arduino OTA (embedded)
 #endif
 
 //    ### Variables ###
@@ -30,6 +30,8 @@ IPAddress ipAddress;
 //  *** Asynchronous MQTT client ***
 AsyncMqttClient mqttClient;                       // Asynchronous MQTT client
 bool mqttStatusReceived = false;                  // True if we received initial status at startup
+uint8_t mqttDisconnectedCount = 0;                // Count of successive disconnected status
+#define MAX_MQTT_DISCONNECTED 15                  // Restart ESP if more tahn this number of disconnected count has bee seen
 
 //  *** Sun set/rise***
 JC_Sunrise sunParams {latitude, longitude, zenith}; // Sun parameters (lat, lon, type of sunset/rise required)
@@ -58,11 +60,11 @@ const char *const sunStatesTable[] PROGMEM = {sunStatesText0, sunStatesText1, su
 
 // Door states (self explained)
 enum doorStates {
-	doorUnknown,
+    doorUnknown,
   doorClosed,
-	doorOpening,
-	doorOpened,
-	doorClosing,
+    doorOpening,
+    doorOpened,
+    doorClosing,
   doorStopped
 };
 
@@ -100,13 +102,13 @@ Adafruit_INA219 motorSensor;        // INA219 I2C class
 sunStates sunState = sunUnknown;    // Sun current state
 doorStates doorState = doorUnknown; // Door current state
 alarmStates alarmState = alarmNone; // Alarm current state
-bool manualMode = false;            // Are we in manual moden, only accepting external commands?
+bool manualMode = false;            // Are we in manual mode, only accepting external commands?
 bool forcedMode = false;            // Are we in forced mode, until sun is aligned with command?
 bool noSleepMode = false;           // No sleep mode enabled (to skip delay in maiin loop)
 bool chickenDetected = false;       // Do we currently detect chicken (close to) door?
 bool doorUncertainPosition = true;  // Is door position uncertain? (reset after a full open or close)
-float motorVoltage = 0;             // Last mesured motor voltage
-uint16_t motorIntensity = 0;        // Last mesured motor intesity
+float motorVoltage = 0;             // Last measured motor voltage
+uint16_t motorIntensity = 0;        // Last measured motor intensity
 float doorOpenPercentage = 0;       // Current door open percentage (0-100%). Valid if doorUncertainPosition is false.
 float doorStartPercentage = 0;      // Door open percentage at start of mouvment. Valid if doorUncertainPosition is false.
 unsigned long motorStartTime = 0;   // Time of motor start
@@ -125,9 +127,9 @@ uint8_t averageLoopCount = 0;       // Count of loop for average
 //  *** Illumination ***
 #define ILLUMINATION_SIZE 60                // Average illumination is made on 60 readings
 int illumination = 0;                       // Average illumination of last minute
-int lastLuminosities[ILLUMINATION_SIZE+1];  // Detailled illumination of last minute
+int lastLuminosities[ILLUMINATION_SIZE+1];  // Detailed illumination of last minute
 uint8_t illuminationPtr = 0;                // Pointer of next illumination to store
-unsigned long illuminationReadTime = 0;     // Last time we read limunosity
+unsigned long illuminationReadTime = 0;     // Last time we read luminosity
 
 //  *** Button ***
 unsigned long buttonPushTime = 0;           // Last time button was pushed
@@ -140,7 +142,7 @@ bool isButtonPushed = false;                // Was button pushed last loop?
 //  *** Message output ***
 
 //  Signal something to the user
-//    Write message on SERIAL_PORT, if defined. Can be indefined (no message), Serial (USB port) or Serial1 (D4 pin)...
+//    Write message on SERIAL_PORT, if defined. Can be undefined (no message), Serial (USB port) or Serial1 (D4 pin)...
 //    Input:
 //      _format: Format of string to be displayed (printf format)
 //      ...: relevant parameters
@@ -158,7 +160,7 @@ static void signal(const char* _format, ...) {
     uint16_t result = mqttClient.publish(mqttSignalTopic, 0, true, msg);  // ... publish message to signal topic
     #ifdef SERIAL_PORT
       if (!result) {
-      SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), msg, mqttSignalTopic, result);
+        SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), msg, mqttSignalTopic, result);
       }
     #endif
   }
@@ -172,8 +174,9 @@ void wiFiSetup() {
   onStationModeGotIPHandler = WiFi.onStationModeGotIP(&onWiFiGotIp);              // Declare got IP callback
 
   signal(PSTR("Connecting to WiFi..."));
-	WiFi.persistent(false);                                                         // Don't save WiFi (Flash wearing compliant)
-	WiFi.hostname(nodeName);									                                      // Defines this module name
+  WiFi.setAutoReconnect(true);                                                    // Set auto reconnect
+  WiFi.persistent(true);                                                          // Save WiFi parameters into flash
+  WiFi.hostname(nodeName);                                                        // Defines this module name
   WiFi.mode(WIFI_STA);                                                            // We want station mode (connect to an existing SSID)
   #ifdef SERIAL_PORT
     SERIAL_PORT.printf(PSTR("SSID: %s, key: %s\n"), wifiSSID, wifiKey);
@@ -204,7 +207,7 @@ static void onWiFiGotIp(WiFiEventStationModeGotIP data) {
 
 // MQTT setup
 void mqttSetup() {
-  if (!mqttServer[0]) {                                     // If MQTT server is not defined
+  if (!mqttServer[0]) {                                   // If MQTT server is not defined
     return;
   }
   mqttClient.setServer(mqttServer, mqttPort);             // Set server IP (or name), and port
@@ -213,7 +216,7 @@ void mqttSetup() {
   mqttClient.onMessage(&onMqttMessage);                   // On message (when subscribed item is received) callback
   mqttClient.onConnect(&onMqttConnect);                   // On connect (when MQTt is connected) callback
   mqttClient.setWill(mqttLastWillTopic, 1, true,          // Last will topic
-  	"{\"state\":\"down\"}");
+    "{\"state\":\"down\"}");
 
 }
 
@@ -226,9 +229,9 @@ void mqttSetup() {
 //    index: index of this message (for long messages)
 //    total: total message count (for long messages)
 static void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) {
-	char message[len+1];                                  // Allocate size for message plus null ending character
-	strncpy(message, payload, len);                       // Copy message on given len
-	message[len] = 0;  // Add zero at end
+    char message[len+1];                                  // Allocate size for message plus null ending character
+    strncpy(message, payload, len);                       // Copy message on given len
+    message[len] = 0;  // Add zero at end
   signal(PSTR("Received: %s"), message);
   if (!strcmp(topic, mqttCommandTopic)) {
     commandReceived(message);                           // We received a message from command topic
@@ -248,17 +251,24 @@ static void onMqttConnect(bool sessionPresent) {
     "{\"state\":\"up\",\"id\":\"" QUOTE(PROG_NAME) "\",\"version\":\"" CHICKEN_DOOR_VERSION "\"}");
   #ifdef SERIAL_PORT
     if (!result) {
-    SERIAL_PORT.printf(PSTR("Publish to %s returned %d\n"), mqttLastWillTopic, result);
+      SERIAL_PORT.printf(PSTR("Publish to %s returned %d\n"), mqttLastWillTopic, result);
     }
   #endif
-  mqttClient.subscribe(mqttCommandTopic, 0);  // Subscribe to command topic
-  mqttClient.subscribe(mqttStatusTopic, 0);   // Subscribe to status topic
-  mqttClient.subscribe(mqttSettingsTopic, 0); // Subscribe to settings topic
+  mqttClient.subscribe(mqttCommandTopic, 0);      // Subscribe to command topic
+  mqttClient.subscribe(mqttStatusTopic, 0);       // Subscribe to status topic
+  mqttClient.subscribe(mqttSettingsTopic, 0);     // Subscribe to settings topic
 }
 
 // Establish connection with MQTT server
 static void mqttConnect() {
   if (mqttServer[0] && !mqttClient.connected()) {  // If not yet connected and server defined
+    mqttDisconnectedCount++;      // Increment disconnected count
+    if (mqttDisconnectedCount > MAX_MQTT_DISCONNECTED) {
+      #ifdef SERIAL_PORT
+        SERIAL_PORT.printf(PSTR("Restarting after %d MQTT disconnected events\n"), mqttDisconnectedCount);
+      #endif
+      ESP.restart();              // Restart ESP
+    }
     signal(PSTR("Connecting to MQTT..."));
     mqttClient.connect();         // Start connection
   }
@@ -278,31 +288,31 @@ void timeSetCallback(bool from_sntp) {
   if (!isTimeValid(nowTime)) {
     return;                                                               // Exit if time is not valid
   }
-        time_t sunSet = 0;                                                      // Today's sunset
-        time_t sunRise = 0;                                                     // Today's sunrise
-        uint16_t sunRiseInt = 0;                                                // Sun rise  in integer minutes (hours * 100) + minutes
-        uint16_t sunSetInt = 0;                                                 // Sun set in integer minutes (hours * 100) + minutes
+  time_t sunSet = 0;                                                      // Today's sunset
+  time_t sunRise = 0;                                                     // Today's sunrise
+  uint16_t sunRiseInt = 0;                                                // Sun rise  in integer minutes (hours * 100) + minutes
+  uint16_t sunSetInt = 0;                                                 // Sun set in integer minutes (hours * 100) + minutes
   sunParams.calculate(nowTime, 0, sunRise, sunSet);                       // Calculate sun set and sun rise
-        struct tm * timeInfo;                                                   // Temporary time structure
-        time_t clearTime = 0;                                                   // A null time
-        timeInfo = gmtime(&clearTime);                                          // Clear timeInfo
-        timeInfo->tm_min = 1;                                                   // Set one minute
-        time_t oneMinute = mktime(timeInfo);                                    // Convert to time_t
-        sunOpen = sunRise + (sunOffsetMinutes * oneMinute);                     // Add sun offset to sunrise
-        sunClose = sunSet - (sunOffsetMinutes * oneMinute);                     // Add sun offset to sunset
-        timeInfo = localtime (&nowTime);                                        // Convert time to time structure
-        // Convert all times to integer value directly readable in decimal (but useless for computation)
-        nowInt = (timeInfo->tm_hour * 100) + timeInfo->tm_min;                  // Compute as hour * 100 + minutes
-        timeInfo = localtime (&sunRise);
-        sunRiseInt = (timeInfo->tm_hour * 100) + timeInfo->tm_min;
-        timeInfo = localtime (&sunSet);
-        sunSetInt = (timeInfo->tm_hour * 100) + timeInfo->tm_min;
-        timeInfo = localtime (&sunOpen);
-        sunOpenInt = (timeInfo->tm_hour * 100) + timeInfo->tm_min;
-        timeInfo = localtime (&sunClose);
-        sunCloseInt = (timeInfo->tm_hour * 100) + timeInfo->tm_min;
-        signal(PSTR("Now %d, SunRise %d, SunSet %d, open %d, close %d"), nowInt, sunRiseInt, sunSetInt, sunOpenInt, sunCloseInt);
-        sendStatus();
+  struct tm * timeInfo;                                                   // Temporary time structure
+  time_t clearTime = 0;                                                   // A null time
+  timeInfo = gmtime(&clearTime);                                          // Clear timeInfo
+  timeInfo->tm_min = 1;                                                   // Set one minute
+  time_t oneMinute = mktime(timeInfo);                                    // Convert to time_t
+  sunOpen = sunRise + (sunOffsetMinutes * oneMinute);                     // Add sun offset to sunrise
+  sunClose = sunSet - (sunOffsetMinutes * oneMinute);                     // Add sun offset to sunset
+  timeInfo = localtime (&nowTime);                                        // Convert time to time structure
+  // Convert all times to integer value directly readable in decimal (but useless for computation)
+  nowInt = (timeInfo->tm_hour * 100) + timeInfo->tm_min;                  // Compute as hour * 100 + minutes
+  timeInfo = localtime (&sunRise);
+  sunRiseInt = (timeInfo->tm_hour * 100) + timeInfo->tm_min;
+  timeInfo = localtime (&sunSet);
+  sunSetInt = (timeInfo->tm_hour * 100) + timeInfo->tm_min;
+  timeInfo = localtime (&sunOpen);
+  sunOpenInt = (timeInfo->tm_hour * 100) + timeInfo->tm_min;
+  timeInfo = localtime (&sunClose);
+  sunCloseInt = (timeInfo->tm_hour * 100) + timeInfo->tm_min;
+  signal(PSTR("Now %d, SunRise %d, SunSet %d, open %d, close %d"), nowInt, sunRiseInt, sunSetInt, sunOpenInt, sunCloseInt);
+  sendStatus();
 }
 
 //  NTP setup
@@ -377,14 +387,14 @@ void ntpLoop() {
 // Door setup
 void doorSetup(){
   digitalWrite(openPin, RELAY_OFF);     // Force open relay to off
-  pinMode(openPin, OUTPUT);           // Set open pin to output mode
+  pinMode(openPin, OUTPUT);             // Set open pin to output mode
 
   digitalWrite(closePin, RELAY_OFF);    // Force close relay to off
-  pinMode(closePin, OUTPUT);          // Set close pin to output mode
+  pinMode(closePin, OUTPUT);            // Set close pin to output mode
 
-  pinMode(chickenDetectionPin, INPUT); // Set detection pin to input mode
+  pinMode(chickenDetectionPin, INPUT);  // Set detection pin to input mode
 
-  motorSensor.begin();                // Start motor sensor
+  motorSensor.begin();                  // Start motor sensor
 }
 
 // Close chicken door
@@ -414,12 +424,12 @@ static void openDoor() {
 // Stop chicken door
 static void stopDoor(alarmStates _stopReason) {
   signal(PSTR("Stopping door, reason %d!"), _stopReason);
-  doorState = doorStopped;    // Set door state
-  alarmState = _stopReason;   // Save stop reason
-  motorStartTime = 0;         // Clear start time
+  doorState = doorStopped;            // Set door state
+  alarmState = _stopReason;           // Save stop reason
+  motorStartTime = 0;                 // Clear start time
   digitalWrite(closePin, RELAY_OFF);  // Deactivate close relay
   digitalWrite(openPin, RELAY_OFF);   // Deactivate open relay
-  sendStatus();               // Update status
+  sendStatus();                       // Update status
 }
 
 // Door management loop
@@ -444,39 +454,39 @@ void doorLoop() {
       doorOpenPercentage = doorOpenPercentage > 100 ? 100 : doorOpenPercentage < 0 ? 0 : doorOpenPercentage;
     }
     // Is a chicken detected?
-    if (chickenDetected) {                           // Yes
+    if (chickenDetected) {                            // Yes
       signal(PSTR("Chicken detected while closing!"));
       openDoor();                                     // Open door
-      alarmState = alarmChickenDetected;            // Set alarm
+      alarmState = alarmChickenDetected;              // Set alarm
     } else {
       // Do we started 20% more than close duration?
       if ((millis() - motorStartTime) > (closeDuration * 1.2)) {
-        stopDoor(alarmClosingTooLong);              // Stop door with reason
+        stopDoor(alarmClosingTooLong);                // Stop door with reason
       } else if ((millis() - motorStartTime) > 500) { // Check motor's intensity only 500 ms after start, masking start overcurrent
         if (                                          // Check motor current giving endOfCourse current
-                  (endOfCourseCurrent < 0 && motorIntensity < -endOfCourseCurrent) ||
-                  (endOfCourseCurrent >= 0 && motorIntensity >= endOfCourseCurrent)
-                ) {
-        signal(PSTR("Door closed"));
-        digitalWrite(closePin, RELAY_OFF);          // Deactivate close relay
-        digitalWrite(openPin, RELAY_OFF);           // Deactivate open relay
-        doorState = doorClosed;                     // Update state
-        doorOpenPercentage = 0;                     // Force percentage
-        doorUncertainPosition = false;              // Clear uncertain position
-        alarmState = alarmNone;                     // Clear alarm
-        motorStartTime = 0;                         // Clear start time
-        sendStatus();                               // Update status
-      } else {
-        if (motorIntensity >= obstacleCurrent       // Motor currunt more than obstacle detected one
+                    (endOfCourseCurrent < 0 && motorIntensity < -endOfCourseCurrent) ||
+                    (endOfCourseCurrent >= 0 && motorIntensity >= endOfCourseCurrent)
+                  ) {
+          signal(PSTR("Door closed"));
+          digitalWrite(closePin, RELAY_OFF);          // Deactivate close relay
+          digitalWrite(openPin, RELAY_OFF);           // Deactivate open relay
+          doorState = doorClosed;                     // Update state
+          doorOpenPercentage = 0;                     // Force percentage
+          doorUncertainPosition = false;              // Clear uncertain position
+          alarmState = alarmNone;                     // Clear alarm
+          motorStartTime = 0;                         // Clear start time
+          sendStatus();                               // Update status
+        } else {
+          if (motorIntensity >= obstacleCurrent       // Motor current more than obstacle detected one
               && (doorOpenPercentage > 5              //  and (not close to fully closed
-              || endOfCourseCurrent < 0)) {         //       or no end of course blocking current)
+                || endOfCourseCurrent < 0)) {         //       or no end of course blocking current)
             signal(PSTR("Door blocked, percentage %f, intensity %d!"), doorOpenPercentage, motorIntensity);
             openDoor();                               // Open door
-          alarmState = alarmDoorBlockedClosing;     // Set alarm
+            alarmState = alarmDoorBlockedClosing;     // Set alarm
+          }
         }
       }
     }
-  }
   }
   // Are we opening?
   if (doorState == doorOpening) {
@@ -488,30 +498,30 @@ void doorLoop() {
       // Do we started 20% more than open duration?
       if ((millis() - motorStartTime) > (openDuration * 1.2)) {
       stopDoor(alarmOpeningTooLong);
-    } else if ((millis() - motorStartTime) > 500) { // Check motor's intensity only 500 ms after start, masking start overcurrent
+    } else if ((millis() - motorStartTime) > 500) { // Check motor's intensity only 500 ms after start, masking start over-current
       if (                                          // Check motor current giving endOfCourse current
                 (endOfCourseCurrent < 0 && motorIntensity < -endOfCourseCurrent) ||
                 (endOfCourseCurrent >= 0 && motorIntensity >= endOfCourseCurrent && doorOpenPercentage >= 95)
               ) {
-      signal(PSTR("Door opened"));
-      digitalWrite(closePin, RELAY_OFF);            // Deactivate close relay
-      digitalWrite(openPin, RELAY_OFF);             // Deactivate open relay
-      doorState = doorOpened;                       // Set status
-      doorOpenPercentage = 100;                     // Force percentage
-      doorUncertainPosition = false;                // Clear uncertain position
-      motorStartTime = 0;                           // Clear start time
-      sendStatus();                                 // Update status
-    } else {
-      if (motorIntensity >= obstacleCurrent         // Motor currunt more than obstacle detected one
-          && (doorOpenPercentage <= 95              //  and (not close to fully open
-            || endOfCourseCurrent < 0)) {           //       or no end of course blocking current)
+        signal(PSTR("Door opened"));
+        digitalWrite(closePin, RELAY_OFF);          // Deactivate close relay
+        digitalWrite(openPin, RELAY_OFF);           // Deactivate open relay
+        doorState = doorOpened;                     // Set status
+        doorOpenPercentage = 100;                   // Force percentage
+        doorUncertainPosition = false;              // Clear uncertain position
+        motorStartTime = 0;                         // Clear start time
+        sendStatus();                               // Update status
+      } else {
+        if (motorIntensity >= obstacleCurrent       // Motor current more than obstacle detected one
+            && (doorOpenPercentage <= 95            //  and (not close to fully open
+              || endOfCourseCurrent < 0)) {         //       or no end of course blocking current)
           signal(PSTR("Door blocked, percentage %d, intensity %d!"), doorOpenPercentage, motorIntensity);
-        stopDoor(alarmDoorBlockedOpening);          // Stop door
+          stopDoor(alarmDoorBlockedOpening);        // Stop door
         }
       }
     }
   }
-  // Door in mouvment
+  // Door in movement
   if (doorState == doorClosing || doorState == doorOpening) {
     if ((millis() - lastStatusTime) > 1000) {       // Every second
       sendStatus();                                 // Update status (lastStatusTime will be set to current time into this routine)
@@ -553,18 +563,18 @@ void illuminationLoop() {
       lastLuminosities[illuminationPtr++] = analogRead(ldrPin);                     // Load illumination
       if (illuminationPtr >= ILLUMINATION_SIZE) {                                   // At end of table?
         illuminationPtr = 0;                                                        // Clear pointer
-        float sum = 0;                                                          // Init sum
+        float sum = 0;                                                              // Init sum
         for (uint8_t i = 0; i < ILLUMINATION_SIZE; i++) {                           // For all illumination
           sum += lastLuminosities[i]; // Add sum
         }
         illumination = sum / ILLUMINATION_SIZE;                                     // Compute average
-        if (!manualMode) {                                                      // If door not in manual mode
+        if (!manualMode) {                                                          // If door not in manual mode
           if (doorState == doorOpened && illumination <= closeIllumination) {       // Are we less than close illumination?
             signal(PSTR("Illumination %d, closing..."));
-            closeDoor();                                                        // Close door
+            closeDoor();                                                            // Close door
           } else if (doorState == doorClosed && illumination >= openIllumination) { // Are we over open illumination?
             signal(PSTR("Illumination %d, opening..."));
-            openDoor();                                                         // Open door
+            openDoor();                                                             // Open door
           }
         }
       }
@@ -625,10 +635,10 @@ void buttonLoop() {
 // Executed when a settings topic has been received
 static void settingsReceived(char* msg) {
   JsonDocument settings;
-	auto error = deserializeJson(settings, msg);  // Read settings
-	if (error) {													        // Error reading settings
-		signal(PSTR("Failed to parse settings >%s<"), msg);
-		return;
+    auto error = deserializeJson(settings, msg);  // Read settings
+    if (error) {                                  // Error reading settings
+        signal(PSTR("Failed to parse settings >%s<"), msg);
+        return;
   }
   // Save values before change
   int16_t sunOffsetMinutesBefore = sunOffsetMinutes;
@@ -665,7 +675,7 @@ static void sendSettings() {
   uint16_t result = mqttClient.publish(mqttSettingsTopic, 0, true, buffer); // Sends to settings topics
   #ifdef SERIAL_PORT
     if (!result) {
-    SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttSettingsTopic, result);
+      SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttSettingsTopic, result);
     }
   #endif
 }
@@ -677,7 +687,7 @@ static void statusReceived(char* msg) {
     mqttClient.unsubscribe(mqttStatusTopic);    // Stop receiving updates (as we'll do it later)
     JsonDocument status;                        // Creates JSON document
     auto error = deserializeJson(status, msg);  // Read status
-    if (error) {													      // Error reading status
+    if (error) {                                // Error reading status
       signal(PSTR("Failed to parse status >%s<"), msg);
       return;
     }
@@ -748,8 +758,8 @@ static void sendStatus() {                              // Exit if no MQTT serve
   }
   status["sunStateText"] = text;
 
-  char buffer[512];                                     // Output buffer
-  serializeJson(status, buffer, sizeof(buffer));  // Load buffer with JSON data
+  char buffer[512];                                    	                  // Output buffer
+  serializeJson(status, buffer, sizeof(buffer));                          // Load buffer with JSON data
   uint16_t result = mqttClient.publish(mqttStatusTopic, 0, true, buffer); // Send to status topic
   #ifdef SERIAL_PORT
   if (!result) {
@@ -761,42 +771,42 @@ static void sendStatus() {                              // Exit if no MQTT serve
 
 // Executed when a command topic has been received
 static void commandReceived(char* msg) {
-  if (!strcmp(msg,"close")) {           // Is this a "close" command?
+  if (!strcmp(msg,"close")) {               // Is this a "close" command?
     forcedMode = true;                      // We're in forced mode
     closeDoor();                            // Close door
   } else if (!strcmp(msg,"open")) {         // "Open" command?
     forcedMode = true;                      // We're in forced mode
     openDoor();                             // Open door
   } else if (!strcmp(msg,"manualclose")) {  // Is this a "close" command?
-    manualMode = true;                  // We're in manual mode
-    closeDoor();                        // Close door
+    manualMode = true;                      // We're in manual mode
+    closeDoor();                            // Close door
   } else if (!strcmp(msg,"manualopen")) {   // "Open" command?
     manualMode = true;                      // We're in manual mode
-    openDoor();                         // Open door
-  } else if (!strcmp(msg,"stop")) {     // "stop" command?
+    openDoor();                             // Open door
+  } else if (!strcmp(msg,"stop")) {         // "stop" command?
     manualMode = true;                      // We're in manual mode
-    stopDoor(alarmStoppedbyUser);       // Stop door with right reason
+    stopDoor(alarmStoppedbyUser);           // Stop door with right reason
   } else if (!strcmp(msg,"nosleep")) {      // "noSleep" command?
     noSleepMode = true;                     // Send status
-  } else if (!strcmp(msg,"status")) {   // "status" command?
-    sendStatus();                       // Send status
-  } else if (!strcmp(msg,"auto")) {     // "auto" command?
-    manualMode = false;                 // Clear manual mode
+  } else if (!strcmp(msg,"status")) {       // "status" command?
+    sendStatus();                           // Send status
+  } else if (!strcmp(msg,"auto")) {         // "auto" command?
+    manualMode = false;                     // Clear manual mode
     forcedMode = false;                     //   and forced mode
     noSleepMode = false;                    //   and no sleep mode
-    sendStatus();                       // Update status
-  } else if (!strcmp(msg,"settings")) { // "settings" command?
-    sendSettings();                     // Send settings
+    sendStatus();                           // Update status
+  } else if (!strcmp(msg,"settings")) {     // "settings" command?
+    sendSettings();                         // Send settings
   } else {
     // Don't signal acked or unknown messages
     if (!(strstr(msg, " done") || strstr(msg, " unknown"))) {
       // Here we have a invalid command not executed
-      char buffer[50];                  // Allocated buffer for answer
+      char buffer[50];                      // Allocated buffer for answer
       snprintf_P(buffer, sizeof(buffer), PSTR("%s unknown"), msg);
       uint16_t result = mqttClient.publish(mqttCommandTopic, 0, true, buffer);
       #ifdef SERIAL_PORT
         if (!result) {
-        SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttCommandTopic, result);
+          SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttCommandTopic, result);
         }
       #endif
       signal(PSTR("Can't understand >%s< command!"), msg);
@@ -809,7 +819,7 @@ static void commandReceived(char* msg) {
   uint16_t result = mqttClient.publish(mqttCommandTopic, 0, true, buffer);
   #ifdef SERIAL_PORT
     if (!result) {
-    SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttCommandTopic, result);
+      SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttCommandTopic, result);
     }
   #endif
 }
@@ -833,9 +843,9 @@ void setup(){
 //    ### Main loop ###
 void loop(){
   buttonLoop();       // Button loop
-  ntpLoop();        // NTP loop
+  ntpLoop();          // NTP loop
   illuminationLoop(); // Illumination loop
-  doorLoop();       // Door loop
+  doorLoop();         // Door loop
   #ifdef OTA_SUPPORT
     ArduinoOTA.handle();
   #endif
