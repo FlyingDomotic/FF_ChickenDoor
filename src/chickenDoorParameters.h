@@ -22,6 +22,8 @@ int8_t ldrPin = A0;                                 // Pin where LDR is connecte
                                                     // Niveau lorsque le bouton est poussé
 #define MAXIMUM_SIGNAL_INTERVAL 600000              // Maximum interval between 2 status messages (in ms)
                                                     // Delai maximum entre 2 messages de statut (en ms)
+#define DS1307_RTC                                  // A DS1307 RTC clock is connected to module (else don't define this)
+                                                    // Une horloge DS1307 est connectée au module (sinon, ne pas définir)
 //  *** Wifi stuff ***
 //  *** Connection WiFi ***
 char wifiSSID[] = "MySSID";                         // SSID to connected to

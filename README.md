@@ -30,9 +30,9 @@ De plus, on a un retour d'état de la porte, des alarmes et même du pourcentage
 
 ## Hardware/Matériel
 
-Module is build around an ESP8266, associated to a pair of relay (to power motor) and an INA219 current detector. Optionally, you can add a LDR (to detect illumination) and an IR detector like E3F-DSP30D1 (to detect a chicken crossing door).
+Module is build around an ESP8266, associated to a pair of relay (to power motor) and an INA219 current detector. Optionally, you can add a LDR (to detect illumination) and an IR detector like E3F-DSP30D1 (to detect a chicken crossing door). An optional DS1307 RTC module allow getting time when an NTP server is not available at startup time.
 
-Le module est construit autour d'un ESP8266, d'une paire de relais (pour alimenter le moteur) et d'un détecteur de courant de type INA219. On peut optionnellement ajouter une LDR (pour détecter la luminosité) et un détecteur infra-rouge genre E3F-DSP30D1(pour détecter une poule entrante/sortante.
+Le module est construit autour d'un ESP8266, d'une paire de relais (pour alimenter le moteur) et d'un détecteur de courant de type INA219. On peut optionnellement ajouter une LDR (pour détecter la luminosité) et un détecteur infra-rouge genre E3F-DSP30D1(pour détecter une poule entrante/sortante. Un module DS1307 optionnel permet d'avoir la date et l'heure si un serveur NTP n'est pas disponible au démarrage de l'ESP. 
 
 ## Network/Réseau
 
@@ -59,6 +59,7 @@ git clone https://github.com/FlyingDomotic/chickenDoor.git chickenDoor
 2. Make ESP connections (have a look at chickenDoor shema.jpg):
 	- Motor's relays connected to D5 (open) and D6 (close). On contact side, connect positive motor's wire (the one which opens door when connected to positive lead) to D5 relay central position, negative motor's wire (the one which opens door when cpnnected to ground) on D6 relay central position. Connect both relays to power ground on normally closed contact and INA219 V- on normally open.
 	- INA219 should be connected to D1 (SCL) and D2 (SDA). In addition, power ground should be connected on GND and power positive voltage to V+. Connect VCC to +3.3V.
+	- Optional DS1307 connected to D1 (SCL) and D2 (SDA). In addition, power ground should be connected on GND and power positive voltage to V+. Connect VCC to +3.3V.
 	- Optional LDR connected between A0 and +3.3V and a 100K pull-up resistor between A0 and ground (leave it unconnected if not used)
 	- Optional IR detector to D7 (leave not connected if not used).
 3. Change settings to map your needs (see here under).
@@ -77,6 +78,7 @@ git clone https://github.com/FlyingDomotic/chickenDoor.git chickenDoor
 2. Connecter l'ESP (jetez un oeil sur le fichier chickenDoor schema.jpg) :
 	- Les relais du moteur sont connectés sur D5 (ouverture) et D6 (fermeture). Du coté contacts, le fil positif du moteur (celui qui ouvre la porte lorsqu'il est connecté au positif de l'alimentation) doit être connecté sur la position centrale du relai D5, le fil négatif du moteur (celui qui ouvre la porte lorsque connecté au négatif de l'alimentation) sur le point central du relai D6. Connecter le contact  normalement fermé de chaque relai à la masse, et le normalement ouvert à la borne V6 de l'INA219.
 	- L'INA219 doit être connecté à D1 (SCL) et D2 (SDA). De plus, la masse de l'alimentation doit être connectée à GND, et le pole positif de l'alimentation du moteur sur V+. Connecter VCC au +3.3V.
+	- le DS1307 (optionnel) doit être connecté à D1 (SCL) et D2 (SDA). De plus, la masse de l'alimentation doit être connectée à GND, et le pole positif de l'alimentation du moteur sur V+. Connecter VCC au +3.3V.
 	- la LDR (optionnelle) doit être connectée entre A0 et le +3.3V et une résistance de tirage de 100 K entre A0 et la masse (laisser non connecté si la LDR n'est pas utilisé).
 	- Le détecteur IR (optionnel) doit être connecté sur D7 (à laisser non connecté sui pas utilisé).
 3. Modifier le paramétrage pour qu'il corresponde à vos besoins (voir plus bas).
@@ -116,7 +118,7 @@ Vous pouvez envoyer les commandes suivantes au sujet MQTT commande. La réponse 
 
 Note: in manual mode, only commands will allow to change door position. In automatic mode, light and/or sun position will move door. Forced mode will be cleared when light/sun will be in phase with current position./En mode manuel, seules les commandes reçues vont changer la position de la porte. En mode automatique, la luminosité et/ou la position du soleil vont déplacer la porte. Le mode forcé sera désactivé lorsque la luminosité et/ou la position du soleil seront en phase avec l'état de la porte.
 
-## Topic contents/Contenu des sujets
+## MQTT topic contents/Contenu des sujets MQTT
 
 	- mqttCommandTopic: MQTT command topic, where commands are received. Write here commands to send to module. It'll write back original command followed by "done" or "unknown"/Sujet MQTT où les commandes sont reçues. Écrivez ici les commandes à envoyer au module. Il va écrire en retour la commande originale suivie de "done" (fait) ou "unknown" (inconnu).
 	- mqttStatusTopic: MQTT status topic, where status is sent to (and read at startup). Data is in JSON format with following fields/sujet MQTT où les états sont envoyés (et lus au lancement). Les données sont au format JSON, avec les champs suivants :
