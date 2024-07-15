@@ -1,4 +1,4 @@
-#define CHICKEN_DOOR_VERSION "24.7.9-1"     // Version of this code
+#define CHICKEN_DOOR_VERSION "24.7.13-3"	// Version of this code
 
 #include <ESP8266WiFi.h>					// Wifi (embedded)
 #include <Arduino.h>						// Arduino (embedded)
@@ -10,7 +10,7 @@
 #include <TZ.h>								// Time zones
 #include <coredecls.h>						// Declaration of settimeofday_cb()
 #include <time.h>							// Time constants and structures
-#include <chickenDoorParameters.h.ff>  		// Constants for this program
+#include <chickenDoorParameters.h>			// Constants for this program
 
 #ifdef DS1307_RTC                           // Do we have RTC module?
     #include "RTClib.h"                     // DS1307 library
@@ -20,6 +20,7 @@
 	#include <ESP8266mDNS.h>				// Dynamic DNS (embedded)
 	#include <ArduinoOTA.h>					// Arduino OTA (embedded)
 #endif
+bool otaActive = false;                     // Is OTA currently active?
 
 //		### Variables ###
 
@@ -35,6 +36,7 @@ IPAddress ipAddress;
 AsyncMqttClient mqttClient;						// Asynchronous MQTT client
 bool mqttStatusReceived = false;				// True if we received initial status at startup
 uint8_t mqttDisconnectedCount = 0;				// Count of successive disconnected status
+unsigned long lastPublishTime = 0;              // Last time we published somet
 #define MAX_MQTT_DISCONNECTED 15				// Restart ESP if more tahn this number of disconnected count has bee seen
 
 //	*** Sun set/rise***
@@ -168,6 +170,7 @@ static void signal(const char* _format, ...) {
 	#endif
 	if (mqttServer[0]) {									// MQTT server defined?
 		uint16_t result = mqttClient.publish(mqttSignalTopic, 0, true, msg);	// ... publish message to signal topic
+        lastPublishTime = millis();
 		#ifdef SERIAL_PORT
 			if (!result) {
 				SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), msg, mqttSignalTopic, result);
@@ -193,11 +196,6 @@ void wiFiSetup() {
 	#endif
 	WiFi.begin(wifiSSID, wifiKey);													// SSID to connect to
 	wifi_set_sleep_type(LIGHT_SLEEP_T);
-	#ifdef OTA_SUPPORT
-		ArduinoOTA.setHostname(nodeName);
-		//ArduinoOTA.setPassword("myOtaPassword");									// Set OTA password and uncomment if needed
-		ArduinoOTA.begin();
-	#endif
 }
 
 // Executed when WiFi is connected
@@ -258,6 +256,7 @@ static void onMqttConnect(bool sessionPresent) {
 	signal(PSTR("MQTT connected"));
 	uint16_t result = mqttClient.publish(mqttLastWillTopic, 0, true,	// Last will topic
 		"{\"state\":\"up\",\"id\":\"" QUOTE(PROG_NAME) "\",\"version\":\"" CHICKEN_DOOR_VERSION "\"}");
+    lastPublishTime = millis();
 	#ifdef SERIAL_PORT
 		if (!result) {
 			SERIAL_PORT.printf(PSTR("Publish to %s returned %d\n"), mqttLastWillTopic, result);
@@ -348,7 +347,7 @@ void timeSetCallback(bool from_sntp) {
 //	NTP setup
 void ntpSetup(){
 	settimeofday_cb(timeSetCallback);
-	configTime(TZ_Europe_Paris, "pool.ntp.org");
+	configTime(TZ_Europe_Paris, "europe.pool.ntp.org");
 	yield();
 }
 
@@ -690,6 +689,36 @@ void buttonLoop() {
 		isButtonPushed = buttonState;
 	}
 }
+
+//  *** OTA ***
+#ifdef OTA_SUPPORT
+    void onStartOTA() {
+        signal(PSTR("OTA starting..."));
+        otaActive = true;
+    }
+
+    // OTA ending
+    void onEndOTA() {
+        signal(PSTR("OTA ending..."));
+        otaActive = false;
+    }
+            
+    // OTA error
+    void onErrorOTA(ota_error_t errorCode) {
+        signal(PSTR("OTA error %d"), errorCode);
+        otaActive = false;
+    }
+
+    void otaSetup() {
+		ArduinoOTA.setHostname(nodeName);
+		//ArduinoOTA.setPassword("myOtaPassword");									// Set OTA password and uncomment if needed
+        ArduinoOTA.onStart(onStartOTA);                 							// Routines to be called when OTA runs
+        ArduinoOTA.onEnd(onEndOTA);
+        ArduinoOTA.onError(onErrorOTA);
+		ArduinoOTA.begin();
+    }
+#endif
+
 //	*** Settings ***
 
 // Executed when a settings topic has been received
@@ -733,6 +762,7 @@ static void sendSettings() {
 	char buffer[512];															// Output buffer
 	serializeJsonPretty(settings, buffer, sizeof(buffer));						// Convert document to string
 	uint16_t result = mqttClient.publish(mqttSettingsTopic, 0, true, buffer);	// Sends to settings topics
+    lastPublishTime = millis();
 	#ifdef SERIAL_PORT
 		if (!result) {
 			SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttSettingsTopic, result);
@@ -758,7 +788,10 @@ static void statusReceived(char* msg) {
 		manualMode = status["manualMode"].as<bool>();
 		forcedMode = status["forcedMode"].as<bool>();
 		noSleepMode = status["noSleepMode"].as<bool>();
+	    motorVoltage = status["motorVoltage"].as<String>().toFloat();
+
 		doorUncertainPosition = (doorState == doorOpening || doorState == doorClosing || doorStartPercentage == doorUnknown);
+
 		// Send status back (update of doorUncertainPosition)
 		sendStatus();
 	}
@@ -821,6 +854,7 @@ static void sendStatus() {							// Exit if no MQTT server
 	char buffer[512];															// Output buffer
 	serializeJson(status, buffer, sizeof(buffer));								// Load buffer with JSON data
 	uint16_t result = mqttClient.publish(mqttStatusTopic, 0, true, buffer);		// Send to status topic
+    lastPublishTime = millis();
 	#ifdef SERIAL_PORT
 	if (!result) {
 		SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttStatusTopic, result);
@@ -864,6 +898,7 @@ static void commandReceived(char* msg) {
 			char buffer[50];									// Allocated buffer for answer
 			snprintf_P(buffer, sizeof(buffer), PSTR("%s unknown"), msg);
 			uint16_t result = mqttClient.publish(mqttCommandTopic, 0, true, buffer);
+            lastPublishTime = millis();
 			#ifdef SERIAL_PORT
 				if (!result) {
 					SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttCommandTopic, result);
@@ -877,6 +912,7 @@ static void commandReceived(char* msg) {
 	char buffer[50];											// Allocated buffer for answer
 	sniprintf(buffer, sizeof(buffer), "%s done", msg);
 	uint16_t result = mqttClient.publish(mqttCommandTopic, 0, true, buffer);
+    lastPublishTime = millis();
 	#ifdef SERIAL_PORT
 		if (!result) {
 			SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttCommandTopic, result);
@@ -897,6 +933,9 @@ void setup(){
     #endif
 	mqttSetup();					// MQTT setup
 	wiFiSetup();					// WiFi setup
+    #ifdef OTA_SUPPORT
+        otaSetup();
+    #endif
 	illuminationSetup();			// Illumination setup
 	doorSetup();					// Door setup
 	buttonSetup();					// Button setup
@@ -912,8 +951,20 @@ void loop(){
 	#ifdef OTA_SUPPORT
 		ArduinoOTA.handle();
 	#endif
-	// If not door in move and not button pushed, delay 5 seconds to reduce power consumption
-	if (doorState != doorClosing && doorState != doorOpening && !isButtonPushed && !noSleepMode) {
-		delay(5000);
+	// If not door in move 
+    //    and not button pushed 
+    //    and last publish > 250 ms
+    //    and initial MQTT status received
+    //    and OTA not active
+    //    and noSleep inactive
+	if (doorState != doorClosing 
+            && doorState != doorOpening
+            && !isButtonPushed
+            && !noSleepMode
+            && (millis() - lastPublishTime) > 250
+            && mqttStatusReceived
+            && !otaActive) {
+        // Delay 5 seconds to reduce power consumption
+    	delay(5000);
 	}
 }
