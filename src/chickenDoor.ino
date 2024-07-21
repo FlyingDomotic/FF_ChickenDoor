@@ -1,4 +1,4 @@
-#define CHICKEN_DOOR_VERSION "24.7.21-1"	// Version of this code
+#define CHICKEN_DOOR_VERSION "24.7.22-1"	// Version of this code
 
 #include <ESP8266WiFi.h>					// Wifi (embedded)
 #include <Arduino.h>						// Arduino (embedded)
@@ -105,6 +105,7 @@ const char alarmStatesText6[] PROGMEM = "Stopped by user";
 const char *const alarmStatesTable[] PROGMEM = {alarmStatesText0, alarmStatesText1, alarmStatesText2, alarmStatesText3, alarmStatesText4, alarmStatesText5, alarmStatesText6};
 
 Adafruit_INA219 motorSensor;			// INA219 I2C class
+unsigned long doorLoopTime = 0;         // Last time loop time has been run
 sunStates sunState = sunUnknown;		// Sun current state
 doorStates doorState = doorUnknown;		// Door current state
 alarmStates alarmState = alarmNone;		// Alarm current state
@@ -138,6 +139,7 @@ uint8_t illuminationPtr = 0;				// Pointer of next illumination to store
 unsigned long illuminationReadTime = 0;		// Last time we read luminosity
 
 //	*** Button ***
+unsigned long buttonLoopTime = 0;			// Last time button loop was run
 unsigned long buttonPushTime = 0;			// Last time button was pushed
 #define SHORT_BUTTON_PUSH 50				// Short button push starts at 50 ms
 #define LONG_BUTTON_PUSH 3000				// Long button push if more than 3 seconds
@@ -463,99 +465,103 @@ static void stopDoor(alarmStates _stopReason) {
 
 // Door management loop
 void doorLoop() {
-	// Is a chicken standing through door?
-	bool previousChickenDetected = chickenDetected;
-	chickenDetected = (digitalRead(chickenDetectionPin) == CHICKEN_DETECTED);
-	if (previousChickenDetected != chickenDetected) {
-		if (chickenDetected) {
-			signal(PSTR("Chicken detected!"));
-		} else {
-			signal(PSTR("Chicken gone"));
-		}
-	}
-	readCurrent();												// Read motor current and voltage
+    unsigned long now = millis();
+    if ((now - doorLoopTime) > 5) {
+        doorLoopTime = now;
+        // Is a chicken standing through door?
+        bool previousChickenDetected = chickenDetected;
+        chickenDetected = (digitalRead(chickenDetectionPin) == CHICKEN_DETECTED);
+        if (previousChickenDetected != chickenDetected) {
+            if (chickenDetected) {
+                signal(PSTR("Chicken detected!"));
+            } else {
+                signal(PSTR("Chicken gone"));
+            }
+        }
+        readCurrent();												// Read motor current and voltage
 
-	// Are we closing?
-	if (doorState == doorClosing) {
-		if (!doorUncertainPosition) {							// Except if door uncertain position
-			// Update door position
-			doorOpenPercentage = doorStartPercentage + (100 * (millis() - motorStartTime) / closeDuration);
-			doorOpenPercentage = doorOpenPercentage > 100 ? 100 : doorOpenPercentage < 0 ? 0 : doorOpenPercentage;
-		}
-		// Is a chicken detected?
-		if (chickenDetected) {									// Yes
-			signal(PSTR("Chicken detected while closing!"));
-			openDoor();											// Open door
-			alarmState = alarmChickenDetected;					// Set alarm
-		} else {
-			// Do we started 20% more than close duration?
-			if ((millis() - motorStartTime) > (closeDuration * 1.2)) {
-				stopDoor(alarmClosingTooLong);					// Stop door with reason
-			} else if ((millis() - motorStartTime) > 500) {		// Check motor's intensity only 500 ms after start, masking start overcurrent
-				if (											// Check motor current giving endOfCourse current
-						(endOfCourseCurrent < 0 && motorIntensity < -endOfCourseCurrent) ||
-						(endOfCourseCurrent >= 0 && motorIntensity >= endOfCourseCurrent)
-					) {
-					signal(PSTR("Door closed"));
-					digitalWrite(closePin, RELAY_OFF);			// Deactivate close relay
-					digitalWrite(openPin, RELAY_OFF);			// Deactivate open relay
-					doorState = doorClosed;						// Update state
-					doorOpenPercentage = 0;						// Force percentage
-					doorUncertainPosition = false;				// Clear uncertain position
-					alarmState = alarmNone;						// Clear alarm
-					motorStartTime = 0;							// Clear start time
-					sendStatus(true);							// Update status
-				} else {
-					if (motorIntensity >= obstacleCurrent		// Motor current more than obstacle detected one
-							&& (doorOpenPercentage > 5			//	and (not close to fully closed
-								|| endOfCourseCurrent < 0)) {	//	or no end of course blocking current)
-						signal(PSTR("Door blocked, percentage %f, intensity %d!"), doorOpenPercentage, motorIntensity);
-						openDoor();								// Open door
-						alarmState = alarmDoorBlockedClosing;	// Set alarm
-					}
-				}
-			}
-		}
-	}
-	// Are we opening?
-	if (doorState == doorOpening) {
-		if (!doorUncertainPosition) {							// Except if door uncertain position
-			// Update dor position
-			doorOpenPercentage = doorStartPercentage + (100 * (millis() - motorStartTime) / openDuration);
-			doorOpenPercentage = doorOpenPercentage > 100 ? 100 : doorOpenPercentage < 0 ? 0 : doorOpenPercentage;
-		}
-			// Do we started 20% more than open duration?
-			if ((millis() - motorStartTime) > (openDuration * 1.2)) {
-			stopDoor(alarmOpeningTooLong);
-		} else if ((millis() - motorStartTime) > 500) {			// Check motor's intensity only 500 ms after start, masking start over-current
-			if (												// Check motor current giving endOfCourse current
-								(endOfCourseCurrent < 0 && motorIntensity < -endOfCourseCurrent) ||
-								(endOfCourseCurrent >= 0 && motorIntensity >= endOfCourseCurrent && doorOpenPercentage >= 95)
-							) {
-				signal(PSTR("Door opened"));
-				digitalWrite(closePin, RELAY_OFF);				// Deactivate close relay
-				digitalWrite(openPin, RELAY_OFF);				// Deactivate open relay
-				doorState = doorOpened;							// Set status
-				doorOpenPercentage = 100;						// Force percentage
-				doorUncertainPosition = false;					// Clear uncertain position
-				motorStartTime = 0;								// Clear start time
-				sendStatus(true);									// Update status
-			} else {
-				if (motorIntensity >= obstacleCurrent			// Motor current more than obstacle detected one
-						&& (doorOpenPercentage <= 95			//	and (not close to fully open
-							|| endOfCourseCurrent < 0)) {		//	or no end of course blocking current)
-					signal(PSTR("Door blocked, percentage %d, intensity %d!"), doorOpenPercentage, motorIntensity);
-					stopDoor(alarmDoorBlockedOpening);			// Stop door
-				}
-			}
-		}
-	}
-	// Door in movement
-	if (doorState == doorClosing || doorState == doorOpening) {
-		if ((millis() - lastStatusTime) > 1000) {				// Every second
-			sendStatus(true);									// Update status (lastStatusTime will be set to current time into this routine)
-		}
-	}
+        // Are we closing?
+        if (doorState == doorClosing) {
+            if (!doorUncertainPosition) {							// Except if door uncertain position
+                // Update door position
+                doorOpenPercentage = doorStartPercentage + (100 * (millis() - motorStartTime) / closeDuration);
+                doorOpenPercentage = doorOpenPercentage > 100 ? 100 : doorOpenPercentage < 0 ? 0 : doorOpenPercentage;
+            }
+            // Is a chicken detected?
+            if (chickenDetected) {									// Yes
+                signal(PSTR("Chicken detected while closing!"));
+                openDoor();											// Open door
+                alarmState = alarmChickenDetected;					// Set alarm
+            } else {
+                // Do we started 20% more than close duration?
+                if ((millis() - motorStartTime) > (closeDuration * 1.2)) {
+                    stopDoor(alarmClosingTooLong);					// Stop door with reason
+                } else if ((millis() - motorStartTime) > 500) {		// Check motor's intensity only 500 ms after start, masking start overcurrent
+                    if (											// Check motor current giving endOfCourse current
+                            (endOfCourseCurrent < 0 && motorIntensity < -endOfCourseCurrent) ||
+                            (endOfCourseCurrent >= 0 && motorIntensity >= endOfCourseCurrent)
+                        ) {
+                        signal(PSTR("Door closed"));
+                        digitalWrite(closePin, RELAY_OFF);			// Deactivate close relay
+                        digitalWrite(openPin, RELAY_OFF);			// Deactivate open relay
+                        doorState = doorClosed;						// Update state
+                        doorOpenPercentage = 0;						// Force percentage
+                        doorUncertainPosition = false;				// Clear uncertain position
+                        alarmState = alarmNone;						// Clear alarm
+                        motorStartTime = 0;							// Clear start time
+                        sendStatus(true);							// Update status
+                    } else {
+                        if (motorIntensity >= obstacleCurrent		// Motor current more than obstacle detected one
+                                && (doorOpenPercentage > 5			//	and (not close to fully closed
+                                    || endOfCourseCurrent < 0)) {	//	or no end of course blocking current)
+                            signal(PSTR("Door blocked, percentage %f, intensity %d!"), doorOpenPercentage, motorIntensity);
+                            openDoor();								// Open door
+                            alarmState = alarmDoorBlockedClosing;	// Set alarm
+                        }
+                    }
+                }
+            }
+        }
+        // Are we opening?
+        if (doorState == doorOpening) {
+            if (!doorUncertainPosition) {							// Except if door uncertain position
+                // Update dor position
+                doorOpenPercentage = doorStartPercentage + (100 * (millis() - motorStartTime) / openDuration);
+                doorOpenPercentage = doorOpenPercentage > 100 ? 100 : doorOpenPercentage < 0 ? 0 : doorOpenPercentage;
+            }
+                // Do we started 20% more than open duration?
+                if ((millis() - motorStartTime) > (openDuration * 1.2)) {
+                stopDoor(alarmOpeningTooLong);
+            } else if ((millis() - motorStartTime) > 500) {			// Check motor's intensity only 500 ms after start, masking start over-current
+                if (												// Check motor current giving endOfCourse current
+                                    (endOfCourseCurrent < 0 && motorIntensity < -endOfCourseCurrent) ||
+                                    (endOfCourseCurrent >= 0 && motorIntensity >= endOfCourseCurrent && doorOpenPercentage >= 95)
+                                ) {
+                    signal(PSTR("Door opened"));
+                    digitalWrite(closePin, RELAY_OFF);				// Deactivate close relay
+                    digitalWrite(openPin, RELAY_OFF);				// Deactivate open relay
+                    doorState = doorOpened;							// Set status
+                    doorOpenPercentage = 100;						// Force percentage
+                    doorUncertainPosition = false;					// Clear uncertain position
+                    motorStartTime = 0;								// Clear start time
+                    sendStatus(true);									// Update status
+                } else {
+                    if (motorIntensity >= obstacleCurrent			// Motor current more than obstacle detected one
+                            && (doorOpenPercentage <= 95			//	and (not close to fully open
+                                || endOfCourseCurrent < 0)) {		//	or no end of course blocking current)
+                        signal(PSTR("Door blocked, percentage %d, intensity %d!"), doorOpenPercentage, motorIntensity);
+                        stopDoor(alarmDoorBlockedOpening);			// Stop door
+                    }
+                }
+            }
+        }
+        // Door in movement
+        if (doorState == doorClosing || doorState == doorOpening) {
+            if ((millis() - lastStatusTime) > 1000) {				// Every second
+                sendStatus(true);									// Update status (lastStatusTime will be set to current time into this routine)
+            }
+        }
+    }
 }
 
 // Current consumption
@@ -652,41 +658,45 @@ void buttonSetup() {
 // Loop
 void buttonLoop() {
 	if (buttonPin != -1) {
-		bool buttonState = (digitalRead(buttonPin) == BUTTON_PUSHED_LEVEL);
-		if (buttonState != isButtonPushed) {
-			// Button state changed
-			if (buttonState) {
-				// We're now pushed
-				buttonPushTime = millis();
-			} else {	// Button released
-				// Was button pushed for more than short push time?
-				if (millis() - buttonPushTime > SHORT_BUTTON_PUSH) {
-					// Was button pushed more than long push time
-					if (millis() - buttonPushTime > LONG_BUTTON_PUSH) {
-						// Long push -> mode auto
-						signal(PSTR("Long push detected, set auto to mode"));
-						manualMode = false;									 	// Manual mode
-					} else {
-						// Short push -> stop is moving, open if closed, close if opened
-						signal(PSTR("Short push detected"));
-						if (doorState == doorClosed) {
-							manualMode = true;									// Manual mode
-							openDoor();
-						} else if (doorState == doorOpened) {
-							manualMode = true;									// Manual mode
-							closeDoor();
-						} else if (doorState == doorOpening || doorState == doorClosing) {
-							manualMode = true;									// Manual mode
-							stopDoor(alarmStoppedbyUser);
-						} else {
-							manualMode = true;
-							openDoor();
-						}
-					}
-				}
-			}
-		}
-		isButtonPushed = buttonState;
+        unsigned long now = millis();
+        if ((now - buttonLoopTime) > 5) {										// Read illumination every second
+            buttonLoopTime = now;
+            bool buttonState = (digitalRead(buttonPin) == BUTTON_PUSHED_LEVEL);
+            if (buttonState != isButtonPushed) {
+                // Button state changed
+                if (buttonState) {
+                    // We're now pushed
+                    buttonPushTime = now;
+                } else {	// Button released
+                    // Was button pushed for more than short push time?
+                    if (now - buttonPushTime > SHORT_BUTTON_PUSH) {
+                        // Was button pushed more than long push time
+                        if (now - buttonPushTime > LONG_BUTTON_PUSH) {
+                            // Long push -> mode auto
+                            signal(PSTR("Long push detected, set auto to mode"));
+                            manualMode = false;									 	// Manual mode
+                        } else {
+                            // Short push -> stop is moving, open if closed, close if opened
+                            signal(PSTR("Short push detected"));
+                            if (doorState == doorClosed) {
+                                manualMode = true;									// Manual mode
+                                openDoor();
+                            } else if (doorState == doorOpened) {
+                                manualMode = true;									// Manual mode
+                                closeDoor();
+                            } else if (doorState == doorOpening || doorState == doorClosing) {
+                                manualMode = true;									// Manual mode
+                                stopDoor(alarmStoppedbyUser);
+                            } else {
+                                manualMode = true;
+                                openDoor();
+                            }
+                        }
+                    }
+                }
+            }
+            isButtonPushed = buttonState;
+        }
 	}
 }
 
@@ -863,7 +873,7 @@ static void sendStatus(bool force) {			        // Exit if no MQTT server
             SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttStatusTopic, result);
         }
         #endif
-        lastStatusTime = millis();									// Save last time we sent an update (used in doorLoop)
+        lastStatusTime = millis();								// Save last time we sent an update (used in doorLoop)
     }
 }
 
