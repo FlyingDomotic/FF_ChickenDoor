@@ -1,4 +1,4 @@
-#define CHICKEN_DOOR_VERSION "24.7.13-3"	// Version of this code
+#define CHICKEN_DOOR_VERSION "24.7.21-1"	// Version of this code
 
 #include <ESP8266WiFi.h>					// Wifi (embedded)
 #include <Arduino.h>						// Arduino (embedded)
@@ -341,7 +341,7 @@ void timeSetCallback(bool from_sntp) {
 	timeInfo = localtime (&sunClose);
 	sunCloseInt = (timeInfo->tm_hour * 100) + timeInfo->tm_min;
 	signal(PSTR("Now %d, SunRise %d, SunSet %d, open %d, close %d"), nowInt, sunRiseInt, sunSetInt, sunOpenInt, sunCloseInt);
-	sendStatus();
+	sendStatus(false);
 }
 
 //	NTP setup
@@ -406,7 +406,7 @@ void ntpLoop() {
 		}
 		// Send a status message if not done for a (too) long time
 		if ((millis() - lastStatusTime) > MAXIMUM_SIGNAL_INTERVAL) {
-			sendStatus();
+			sendStatus(false);
 		}
 	}
 }
@@ -435,7 +435,7 @@ static void closeDoor() {
 	motorStartTime = millis();					//	Save start time
 	digitalWrite(openPin, RELAY_OFF);			// Deactivate open relay
 	digitalWrite(closePin, RELAY_ON);			// Activate close relay
-	sendStatus();								// Update status
+	sendStatus(true);							// Update status
 }
 
 // Open chicken door
@@ -447,7 +447,7 @@ static void openDoor() {
 	motorStartTime = millis();					// Save start time
 	digitalWrite(closePin, RELAY_OFF);			// Deactivate close relay
 	digitalWrite(openPin, RELAY_ON);			// Activate open relay
-	sendStatus();								// Update status
+	sendStatus(true);							// Update status
 }
 
 // Stop chicken door
@@ -458,7 +458,7 @@ static void stopDoor(alarmStates _stopReason) {
 	motorStartTime = 0;							// Clear start time
 	digitalWrite(closePin, RELAY_OFF);			// Deactivate close relay
 	digitalWrite(openPin, RELAY_OFF);			// Deactivate open relay
-	sendStatus();								// Update status
+	sendStatus(true);							// Update status
 }
 
 // Door management loop
@@ -504,7 +504,7 @@ void doorLoop() {
 					doorUncertainPosition = false;				// Clear uncertain position
 					alarmState = alarmNone;						// Clear alarm
 					motorStartTime = 0;							// Clear start time
-					sendStatus();								// Update status
+					sendStatus(true);							// Update status
 				} else {
 					if (motorIntensity >= obstacleCurrent		// Motor current more than obstacle detected one
 							&& (doorOpenPercentage > 5			//	and (not close to fully closed
@@ -539,7 +539,7 @@ void doorLoop() {
 				doorOpenPercentage = 100;						// Force percentage
 				doorUncertainPosition = false;					// Clear uncertain position
 				motorStartTime = 0;								// Clear start time
-				sendStatus();									// Update status
+				sendStatus(true);									// Update status
 			} else {
 				if (motorIntensity >= obstacleCurrent			// Motor current more than obstacle detected one
 						&& (doorOpenPercentage <= 95			//	and (not close to fully open
@@ -553,7 +553,7 @@ void doorLoop() {
 	// Door in movement
 	if (doorState == doorClosing || doorState == doorOpening) {
 		if ((millis() - lastStatusTime) > 1000) {				// Every second
-			sendStatus();										// Update status (lastStatusTime will be set to current time into this routine)
+			sendStatus(true);									// Update status (lastStatusTime will be set to current time into this routine)
 		}
 	}
 }
@@ -790,77 +790,81 @@ static void statusReceived(char* msg) {
 		noSleepMode = status["noSleepMode"].as<bool>();
 	    motorVoltage = status["motorVoltage"].as<String>().toFloat();
 
-		doorUncertainPosition = (doorState == doorOpening || doorState == doorClosing || doorStartPercentage == doorUnknown);
+		doorUncertainPosition = (doorState == doorOpening || doorState == doorClosing || doorState == doorUnknown);
 
 		// Send status back (update of doorUncertainPosition)
-		sendStatus();
+		sendStatus(true);
 	}
 }
 
 // Sends a status
-static void sendStatus() {							// Exit if no MQTT server
-	if (!mqttServer[0]) {
+static void sendStatus(bool force) {			        // Exit if no MQTT server
+	// Exit if no mqttServer defined
+    if (!mqttServer[0]) {
 		return;
 	}
-	JsonDocument status;							// Creates JSON document
-	// Load all data
-	char text[50];
-	if (doorState < 0 || doorState >= sizeof(doorStatesTable)) {
-		snprintf_P(text, sizeof(text), PSTR("??? %d ???"), doorState);
-	} else {
-		strncpy_P(text, (char *)pgm_read_ptr(&(doorStatesTable[doorState])), sizeof(text));
-	}
-	status["doorStateText"] = text;
-	if (alarmState < 0 || alarmState >= sizeof(alarmStatesTable)) {
-		snprintf_P(text, sizeof(text), PSTR("??? %d ???"), alarmState);
-	} else {
-		strncpy_P(text, (char *)pgm_read_ptr(&(alarmStatesTable[alarmState])), sizeof(text));
-	}
-	status["alarmStateText"] = text;
-	if (sunState < 0 || sunState >= sizeof(sunStatesTable)) {
-		snprintf_P(text, sizeof(text), PSTR("??? %d ???"), sunState);
-	} else {
-		strncpy_P(text, (char *)pgm_read_ptr(&(sunStatesTable[sunState])), sizeof(text));
-	}
-	status["sunStateText"] = text;
-	status["motorIntensity"] = motorIntensity;
-	status["illumination"] = illumination;
-	status["doorOpenPercentage"] = doorOpenPercentage;
-	status["motorDuration"] = motorStartTime ? (millis()-motorStartTime)/1000 : 0;
-	status["chickenDetected"] = chickenDetected ? true : false;
-	status["doorUncertainPosition"] = doorUncertainPosition ? true : false;
-	status["manualMode"] = manualMode ? true : false;
-	status["forcedMode"] = forcedMode ? true : false;
-	status["noSleepMode"] = noSleepMode ? true : false;
-	snprintf_P(text, sizeof(text), PSTR("%.2f"), motorVoltage);
-	status["motorVoltage"] = text;
-	status["doorState"] = doorState;
-	status["alarmState"] = alarmState;
-	status["sunState"] = sunState;
-	status["lastStatusTime"] = lastStatusTime ? (millis()-lastStatusTime)/1000 : 0;
-	snprintf_P(text, sizeof(text), PSTR("%02d:%02d"), nowInt/100, nowInt % 100);
-	status["now"] = text;
-	snprintf_P(text, sizeof(text), PSTR("%02d:%02d"), sunOpenInt/100, sunOpenInt % 100);
-	status["sunOpen"] = text;
-	snprintf_P(text, sizeof(text), PSTR("%02d:%02d"), sunCloseInt/100, sunCloseInt % 100);
-	status["sunClose"] = text;
-	if (sunState < 0 || sunState >= sizeof(sunStatesTable)) {
-		snprintf_P(text, sizeof(text), PSTR("??? %d ???"), sunState);
-	} else {
-		strncpy_P(text, (char *)pgm_read_ptr(&(sunStatesTable[sunState])), sizeof(text));
-	}
-	status["sunStateText"] = text;
+    // Send status if one already received or force asked
+	if (mqttStatusReceived | force) {
+        JsonDocument status;							// Creates JSON document
+        // Load all data
+        char text[50];
+        if (doorState < 0 || doorState >= sizeof(doorStatesTable)) {
+            snprintf_P(text, sizeof(text), PSTR("??? %d ???"), doorState);
+        } else {
+            strncpy_P(text, (char *)pgm_read_ptr(&(doorStatesTable[doorState])), sizeof(text));
+        }
+        status["doorStateText"] = text;
+        if (alarmState < 0 || alarmState >= sizeof(alarmStatesTable)) {
+            snprintf_P(text, sizeof(text), PSTR("??? %d ???"), alarmState);
+        } else {
+            strncpy_P(text, (char *)pgm_read_ptr(&(alarmStatesTable[alarmState])), sizeof(text));
+        }
+        status["alarmStateText"] = text;
+        if (sunState < 0 || sunState >= sizeof(sunStatesTable)) {
+            snprintf_P(text, sizeof(text), PSTR("??? %d ???"), sunState);
+        } else {
+            strncpy_P(text, (char *)pgm_read_ptr(&(sunStatesTable[sunState])), sizeof(text));
+        }
+        status["sunStateText"] = text;
+        status["motorIntensity"] = motorIntensity;
+        status["illumination"] = illumination;
+        status["doorOpenPercentage"] = doorOpenPercentage;
+        status["motorDuration"] = motorStartTime ? (millis()-motorStartTime)/1000 : 0;
+        status["chickenDetected"] = chickenDetected ? true : false;
+        status["doorUncertainPosition"] = doorUncertainPosition ? true : false;
+        status["manualMode"] = manualMode ? true : false;
+        status["forcedMode"] = forcedMode ? true : false;
+        status["noSleepMode"] = noSleepMode ? true : false;
+        snprintf_P(text, sizeof(text), PSTR("%.2f"), motorVoltage);
+        status["motorVoltage"] = text;
+        status["doorState"] = doorState;
+        status["alarmState"] = alarmState;
+        status["sunState"] = sunState;
+        status["lastStatusTime"] = lastStatusTime ? (millis()-lastStatusTime)/1000 : 0;
+        snprintf_P(text, sizeof(text), PSTR("%02d:%02d"), nowInt/100, nowInt % 100);
+        status["now"] = text;
+        snprintf_P(text, sizeof(text), PSTR("%02d:%02d"), sunOpenInt/100, sunOpenInt % 100);
+        status["sunOpen"] = text;
+        snprintf_P(text, sizeof(text), PSTR("%02d:%02d"), sunCloseInt/100, sunCloseInt % 100);
+        status["sunClose"] = text;
+        if (sunState < 0 || sunState >= sizeof(sunStatesTable)) {
+            snprintf_P(text, sizeof(text), PSTR("??? %d ???"), sunState);
+        } else {
+            strncpy_P(text, (char *)pgm_read_ptr(&(sunStatesTable[sunState])), sizeof(text));
+        }
+        status["sunStateText"] = text;
 
-	char buffer[512];															// Output buffer
-	serializeJson(status, buffer, sizeof(buffer));								// Load buffer with JSON data
-	uint16_t result = mqttClient.publish(mqttStatusTopic, 0, true, buffer);		// Send to status topic
-    lastPublishTime = millis();
-	#ifdef SERIAL_PORT
-	if (!result) {
-		SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttStatusTopic, result);
-	}
-	#endif
-	lastStatusTime = millis();									// Save last time we sent an update (used in doorLoop)
+        char buffer[512];															// Output buffer
+        serializeJson(status, buffer, sizeof(buffer));								// Load buffer with JSON data
+        uint16_t result = mqttClient.publish(mqttStatusTopic, 0, true, buffer);		// Send to status topic
+        lastPublishTime = millis();
+        #ifdef SERIAL_PORT
+        if (!result) {
+            SERIAL_PORT.printf(PSTR("Publish %s to %s returned %d\n"), buffer, mqttStatusTopic, result);
+        }
+        #endif
+        lastStatusTime = millis();									// Save last time we sent an update (used in doorLoop)
+    }
 }
 
 // Executed when a command topic has been received
@@ -883,12 +887,12 @@ static void commandReceived(char* msg) {
 	} else if (!strcmp(msg,"nosleep")) {						// "noSleep" command?
 		noSleepMode = true;										// Send status
 	} else if (!strcmp(msg,"status")) {			 				// "status" command?
-		sendStatus();											// Send status
+		sendStatus(false);										// Send status
 	} else if (!strcmp(msg,"auto")) {							// "auto" command?
 		manualMode = false;										// Clear manual mode
 		forcedMode = false;										//	 and forced mode
 		noSleepMode = false;									//	 and no sleep mode
-		sendStatus();											// Update status
+		sendStatus(false);										// Update status
 	} else if (!strcmp(msg,"settings")) {						// "settings" command?
 		sendSettings();											// Send settings
 	} else {
