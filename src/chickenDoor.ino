@@ -1,6 +1,6 @@
-#define CHICKEN_DOOR_VERSION "24.7.22-1"	// Version of this code
+#define CHICKEN_DOOR_VERSION "25.8.20-1"                            // Version of this code
 
-#include <ESP8266WiFi.h>					// Wifi (embedded)
+#include <ESP8266WiFi.h>                                            // WiFi (embedded)
 #include <Arduino.h>						// Arduino (embedded)
 #include <Wire.h>							// I2C (embedded)
 #include <AsyncMqttClient.h>				// Asynchronous MQTT client https://github.com/marvinroger/async-mqtt-client
@@ -10,7 +10,10 @@
 #include <TZ.h>								// Time zones
 #include <coredecls.h>						// Declaration of settimeofday_cb()
 #include <time.h>							// Time constants and structures
-#include <chickenDoorParameters.h>			// Constants for this program
+#include <chickenDoorParameters.h>                                  // Constants for this program
+extern "C" {
+    #include <user_interface.h>                                     // Define ESP routines
+}
 
 #ifdef DS1307_RTC                           // Do we have RTC module?
     #include "RTClib.h"                     // DS1307 library
@@ -27,7 +30,7 @@ bool otaActive = false;                     // Is OTA currently active?
 #define XQUOTE(x) #x
 #define QUOTE(x) XQUOTE(x)
 
-//	*** Wifi stuff ***
+//  *** WiFi stuff ***
 WiFiEventHandler onStationModeConnectedHandler;	// Event handler called when WiFi is connected
 WiFiEventHandler onStationModeGotIPHandler;		// Event handler called when WiFi got an IP
 IPAddress ipAddress;
@@ -35,9 +38,10 @@ IPAddress ipAddress;
 //	*** Asynchronous MQTT client ***
 AsyncMqttClient mqttClient;						// Asynchronous MQTT client
 bool mqttStatusReceived = false;				// True if we received initial status at startup
+bool needToSendStatus = false;                                      // True if we need to send status
 uint8_t mqttDisconnectedCount = 0;				// Count of successive disconnected status
-unsigned long lastPublishTime = 0;              // Last time we published somet
-#define MAX_MQTT_DISCONNECTED 15				// Restart ESP if more tahn this number of disconnected count has bee seen
+unsigned long lastPublishTime = 0;                                  // Last time we published something
+#define MAX_MQTT_DISCONNECTED 15                                    // Restart ESP if more than this number of disconnected count has bee seen
 
 //	*** Sun set/rise***
 JC_Sunrise sunParams {latitude, longitude, zenith};	// Sun parameters (lat, lon, type of sunset/rise required)
@@ -111,16 +115,17 @@ doorStates doorState = doorUnknown;		// Door current state
 alarmStates alarmState = alarmNone;		// Alarm current state
 bool manualMode = false;				// Are we in manual mode, only accepting external commands?
 bool forcedMode = false;				// Are we in forced mode, until sun is aligned with command?
-bool noSleepMode = false;				// No sleep mode enabled (to skip delay in maiin loop)
+bool noSleepMode = false;                                           // No sleep mode enabled (to skip delay in main loop)
 bool chickenDetected = false;			// Do we currently detect chicken (close to) door?
 bool doorUncertainPosition = true;		// Is door position uncertain? (reset after a full open or close)
 float motorVoltage = 0;					// Last measured motor voltage
 uint16_t motorIntensity = 0;			// Last measured motor intensity
 float doorOpenPercentage = 0;			// Current door open percentage (0-100%). Valid if doorUncertainPosition is false.
-float doorStartPercentage = 0;			// Door open percentage at start of mouvment. Valid if doorUncertainPosition is false.
+float doorStartPercentage = 0;                                      // Door open percentage at start of movement. Valid if doorUncertainPosition is false.
 unsigned long motorStartTime = 0;		// Time of motor start
 unsigned long lastStatusTime = 0;		// Time of last status message sent
 unsigned long lastCurrentRead = 0;		// Time of last current/voltage read
+unsigned long lastRestartTime = 0;                                  // Time of last restart request received
 float cumulatedVoltage = 0;				// Cumulated voltage to make an average
 float cumulatedIntensity = 0;			// Cumulated intensity to make an average
 uint8_t averageLoopCount = 0;			// Count of loop for average
@@ -226,14 +231,13 @@ void mqttSetup() {
 	mqttClient.onConnect(&onMqttConnect);					// On connect (when MQTt is connected) callback
 	mqttClient.setWill(mqttLastWillTopic, 1, true,			// Last will topic
 		"{\"state\":\"down\"}");
-
 }
 
 // Executed when a subscribed message is received
 //	Input:
 //		topic: topic of received message
-//		payload: content of message (WARNING: without ending numm character, use len)
-//		properties: MQTT properties associated with thos message
+//      payload: content of message (WARNING: without ending null character, use len)
+//      properties: MQTT properties associated with this message
 //		len: payload length
 //		index: index of this message (for long messages)
 //		total: total message count (for long messages)
@@ -241,7 +245,7 @@ static void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProp
 		char message[len+1];								// Allocate size for message plus null ending character
 		strncpy(message, payload, len);						// Copy message on given len
 		message[len] = 0;	// Add zero at end
-	signal(PSTR("Received: %s"), message);
+    signal(PSTR("Received: %s from %s"), message, topic);
 	if (!strcmp(topic, mqttCommandTopic)) {
 		commandReceived(message);							// We received a message from command topic
 	} else if (!strcmp(topic, mqttSettingsTopic)) {
@@ -256,7 +260,7 @@ static void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProp
 //Executed when MQTT is connected
 static void onMqttConnect(bool sessionPresent) {
 	signal(PSTR("MQTT connected"));
-	uint16_t result = mqttClient.publish(mqttLastWillTopic, 0, true,	// Last will topic
+    uint16_t result = mqttClient.publish(mqttLastWillTopic, 0, true,// Last will topic
 		"{\"state\":\"up\",\"id\":\"" QUOTE(PROG_NAME) "\",\"version\":\"" CHICKEN_DOOR_VERSION "\"}");
     lastPublishTime = millis();
 	#ifdef SERIAL_PORT
@@ -292,14 +296,18 @@ bool isTimeValid(time_t t) {
 		return t >= old_past;
 }
 
+static void timeSetCallback2() {
+    timeSetCallback(true);
+}
+
 // NTP set time callback - called each time NTP time is set (or adjusted every hour)
-void timeSetCallback(bool from_sntp) {
+static void timeSetCallback(bool from_sntp) {
     time_t nowTime = time(nullptr);							// Get current time
     if (!isTimeValid(nowTime)) {                            // Exit if time is not valid
         return;
     }
     struct tm *nowLocal = localtime(&nowTime);
-    signal(PSTR("Time changed by %s at %02d/%02d/%04d %02d:%02d:%02d\n"),
+    signal(PSTR("Time changed by %s at %02d/%02d/%04d %02d:%02d:%02d"),
         from_sntp ? "SNTP" : "RTC", nowLocal->tm_mday, nowLocal->tm_mon+1, nowLocal->tm_year + 1900, nowLocal->tm_hour, nowLocal->tm_min, nowLocal->tm_sec, from_sntp ? "NTP" : "RTC");
     // Try to synchronize RTC only if time changed by NTP
     #ifdef DS1307_RTC
@@ -348,7 +356,7 @@ void timeSetCallback(bool from_sntp) {
 
 //	NTP setup
 void ntpSetup(){
-	settimeofday_cb(timeSetCallback);
+    settimeofday_cb(timeSetCallback2);
 	configTime(TZ_Europe_Paris, "europe.pool.ntp.org");
 	yield();
 }
@@ -496,7 +504,7 @@ void doorLoop() {
                 // Do we started 20% more than close duration?
                 if ((millis() - motorStartTime) > (closeDuration * 1.2)) {
                     stopDoor(alarmClosingTooLong);					// Stop door with reason
-                } else if ((millis() - motorStartTime) > 500) {		// Check motor's intensity only 500 ms after start, masking start overcurrent
+                } else if ((millis() - motorStartTime) > 500) {     // Check motor's intensity only 500 ms after start, masking start over-current
                     if (											// Check motor current giving endOfCourse current
                             (endOfCourseCurrent < 0 && motorIntensity < -endOfCourseCurrent) ||
                             (endOfCourseCurrent >= 0 && motorIntensity >= endOfCourseCurrent)
@@ -549,7 +557,7 @@ void doorLoop() {
                     if (motorIntensity >= obstacleCurrent			// Motor current more than obstacle detected one
                             && (doorOpenPercentage <= 95			//	and (not close to fully open
                                 || endOfCourseCurrent < 0)) {		//	or no end of course blocking current)
-                        signal(PSTR("Door blocked, percentage %d, intensity %d!"), doorOpenPercentage, motorIntensity);
+                        signal(PSTR("Door blocked, percentage %f, intensity %d!"), doorOpenPercentage, motorIntensity);
                         stopDoor(alarmDoorBlockedOpening);			// Stop door
                     }
                 }
@@ -572,6 +580,9 @@ void readCurrent() {
 		averageLoopCount++;												// Add one sample
 		if (averageLoopCount >= AVERAGE_LOOP_COUNT){					// We added all required samples
 			motorVoltage = cumulatedVoltage / averageLoopCount;			// Compute average voltage
+            if (motorVoltage < 9.0) {                               // Don't accept voltage under 9V
+                motorVoltage = 9.0;
+            }
 			motorIntensity = cumulatedIntensity / averageLoopCount;		// Compute average intensity
 			cumulatedVoltage = 0;										// Reset data
 			cumulatedIntensity = 0;
@@ -809,12 +820,20 @@ static void statusReceived(char* msg) {
 
 // Sends a status
 static void sendStatus(bool force) {			        // Exit if no MQTT server
+    // Send status if one already received or force asked
+    if (mqttStatusReceived | force) {
+        needToSendStatus = true;
+    }
+}
+
+// MQTT Loop
+void mqttLoop() {
 	// Exit if no mqttServer defined
     if (!mqttServer[0]) {
 		return;
 	}
-    // Send status if one already received or force asked
-	if (mqttStatusReceived | force) {
+    if (needToSendStatus) {
+        needToSendStatus = false;
         JsonDocument status;							// Creates JSON document
         // Load all data
         char text[50];
@@ -851,7 +870,9 @@ static void sendStatus(bool force) {			        // Exit if no MQTT server
         status["alarmState"] = alarmState;
         status["sunState"] = sunState;
         status["lastStatusTime"] = lastStatusTime ? (millis()-lastStatusTime)/1000 : 0;
-        snprintf_P(text, sizeof(text), PSTR("%02d:%02d"), nowInt/100, nowInt % 100);
+        time_t nowTime = time(nullptr);                             // Get current time
+        struct tm * timeInfo = localtime (&nowTime);                // Local time in time structure
+        snprintf_P(text, sizeof(text), PSTR("%02d:%02d:%02d"), timeInfo->tm_hour, timeInfo->tm_min, timeInfo->tm_sec);
         status["now"] = text;
         snprintf_P(text, sizeof(text), PSTR("%02d:%02d"), sunOpenInt/100, sunOpenInt % 100);
         status["sunOpen"] = text;
@@ -896,6 +917,8 @@ static void commandReceived(char* msg) {
 		stopDoor(alarmStoppedbyUser);							// Stop door with right reason
 	} else if (!strcmp(msg,"nosleep")) {						// "noSleep" command?
 		noSleepMode = true;										// Send status
+    } else if (!strcmp(msg,"restart")) {                            // "restart" command?
+        lastRestartTime = millis();                                 // Load last restart request time
 	} else if (!strcmp(msg,"status")) {			 				// "status" command?
 		sendStatus(false);										// Send status
 	} else if (!strcmp(msg,"auto")) {							// "auto" command?
@@ -941,12 +964,25 @@ void setup(){
 		SERIAL_PORT.println("");
 	#endif
 	signal(PSTR(QUOTE(PROG_NAME) " V" CHICKEN_DOOR_VERSION " starting..."));
+
+    struct rst_info *rtc_info = system_get_rst_info();
+    // Send reset reason
+    signal("Reset reason: %x - %s", rtc_info->reason, ESP.getResetReason().c_str());
+    // In case of software restart, send additional info
+    if (rtc_info->reason == REASON_WDT_RST || rtc_info->reason == REASON_EXCEPTION_RST || rtc_info->reason == REASON_SOFT_WDT_RST) {
+        // If crashed, print exception
+        if (rtc_info->reason == REASON_EXCEPTION_RST) {
+            signal("Fatal exception (%d)", rtc_info->exccause);
+        }
+        signal("epc1=0x%08x, epc2=0x%08x, epc3=0x%08x, excvaddr=0x%08x, depc=0x%08x", rtc_info->epc1, rtc_info->epc2, rtc_info->epc3, rtc_info->excvaddr, rtc_info->depc);
+    }
+
+    wiFiSetup();                                                    // WiFi setup
 	ntpSetup();						// NTP setup
     #ifdef DS1307_RTC
         ds1307Setup();              // DS1307 setup
     #endif
 	mqttSetup();					// MQTT setup
-	wiFiSetup();					// WiFi setup
     #ifdef OTA_SUPPORT
         otaSetup();
     #endif
@@ -962,22 +998,26 @@ void loop(){
 	ntpLoop();						// NTP loop
 	illuminationLoop();				// Illumination loop
 	doorLoop();						// Door loop
+    mqttLoop();                                                     // MQTT loop
 	#ifdef OTA_SUPPORT
 		ArduinoOTA.handle();
 	#endif
+    if (lastRestartTime && ((millis() - lastRestartTime) > 2000)) {
+        ESP.restart();
+    }
 	// If not door in move 
     //    and not button pushed 
     //    and last publish > 250 ms
     //    and initial MQTT status received
     //    and OTA not active
     //    and noSleep inactive
-	if (doorState != doorClosing 
-            && doorState != doorOpening
-            && !isButtonPushed
-            && !noSleepMode
-            && (millis() - lastPublishTime) > 250
-            && mqttStatusReceived
-            && !otaActive) {
+    if ((doorState != doorClosing)
+            && (doorState != doorOpening)
+            && (!isButtonPushed)
+            && (!noSleepMode)
+            && ((millis() - lastPublishTime) > 500)
+            && (mqttStatusReceived)
+            && (!otaActive)) {
         // Delay 5 seconds to reduce power consumption
     	delay(5000);
 	}
